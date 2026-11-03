@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Visualizer</title>
+<style>
+  :root { color-scheme: dark; --panel: #16181dd9; --fg: #e6e8ee; --muted: #9aa3b2; --accent: #4fa3ff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 14px system-ui, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #panel { position: fixed; top: 12px; left: 12px; right: 12px; max-width: 760px; background: var(--panel);
+           backdrop-filter: blur(8px); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; z-index: 1; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  label { color: var(--muted); }
+  select, button, input[type=file] { font: inherit; color: var(--fg); background: #262a33; border: 1px solid #3a404c;
+           border-radius: 6px; padding: 5px 8px; max-width: 100%; }
+  button:hover, select:hover { border-color: var(--accent); }
+  audio { width: 100%; height: 32px; }
+  #status { color: var(--muted); font-size: 12px; min-height: 1em; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c2d"></canvas>
+<canvas id="cgl" class="hidden"></canvas>
+
+<div id="panel">
+  <div class="row">
+    <label>Source <select id="mode">
+      <option value="A">A · Play a file here (pick output)</option>
+      <option value="B">B · Capture system / loopback audio</option>
+    </select></label>
+    <label>Effect <select id="effect">
+      <option value="bars">Bars</option>
+      <option value="scope">Scope</option>
+      <option value="ambience">Ambience</option>
+      <option value="tolerance">Tolerance</option>
+      <option value="alchemy">Alchemy</option>
+    </select></label>
+    <label id="presetWrap" class="hidden">Preset <select id="preset"></select></label>
+  </div>
+  <div id="modeA" class="row">
+    <input type="file" id="file" accept="audio/*">
+    <label>Output <select id="outDev"></select></label>
+    <button id="unlock" title="Browsers hide device names until a microphone permission is granted">Show device names</button>
+    <audio id="audio" controls></audio>
+  </div>
+  <div id="modeB" class="row hidden">
+    <label>Input <select id="inDev"></select></label>
+    <button id="capture">Capture input</button>
+    <button id="share">Share tab / system audio</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const status = msg => { $('status').textContent = msg; };
+const md = navigator.mediaDevices;
+const canSink = 'setSinkId' in AudioContext.prototype;
+
+// ---------- audio graph ----------
+let ctx, analyser, mediaSrc, aAttached = false, capSrc, capStream;
+let freq = new Uint8Array(1024), wave = new Uint8Array(2048).fill(128);
+
+function audio() { // created lazily: browsers only allow audio after a user gesture
+  if (!ctx) {
+    ctx = new AudioContext();
+    analyser = Object.assign(ctx.createAnalyser(), { fftSize: 2048, smoothingTimeConstant: 0.75 });
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    analyser.connect(mute).connect(ctx.destination); // keeps the analyser processing without making it audible
+    freq = new Uint8Array(analyser.frequencyBinCount);
+    wave = new Uint8Array(analyser.fftSize);
+    buildBars(ctx.sampleRate, analyser.frequencyBinCount);
+    applySink();
+  }
+  ctx.resume();
+  return ctx;
+}
+
+function attachA() {
+  audio();
+  stopCapture();
+  if (!mediaSrc) {
+    mediaSrc = ctx.createMediaElementSource($('audio')); // from now on the element plays through ctx (and its sink)
+    mediaSrc.connect(ctx.destination);
+  }
+  if (!aAttached) { mediaSrc.connect(analyser); aAttached = true; }
+}
+
+function detachA() {
+  $('audio').pause();
+  if (aAttached) { mediaSrc.disconnect(analyser); aAttached = false; }
+}
+
+function stopCapture() {
+  capStream?.getTracks().forEach(t => t.stop());
+  capSrc?.disconnect();
+  capStream = capSrc = null;
+}
+
+async function startCapture(getStream, what) {
+  audio();
+  try {
+    const s = await getStream();
+    if (!s.getAudioTracks().length) {
+      s.getTracks().forEach(t => t.stop());
+      throw new Error('no audio track was shared. Tick "Share audio" in the picker.');
+    }
+    stopCapture();
+    detachA();
+    capStream = s;
+    capSrc = ctx.createMediaStreamSource(s);
+    capSrc.connect(analyser); // not to the destination: you would hear it twice or get feedback
+    s.getTracks().forEach(t => t.onended = () => { if (capStream === s) { stopCapture(); status('Capture ended.'); } });
+    status(`Capturing: ${what}`);
+    listDevices(); // labels become visible once permission is granted
+  } catch (e) {
+    status(`Capture failed: ${e.message}`);
+  }
+}
+
+// ---------- devices ----------
+async function listDevices() {
+  if (!md) return status('Device access needs https or http://localhost.');
+  const devs = await md.enumerateDevices();
+  fill($('outDev'), devs.filter(d => d.kind === 'audiooutput'), 'Default output');
+  fill($('inDev'), devs.filter(d => d.kind === 'audioinput'), 'Default input');
+}
+
+function fill(sel, devs, fallback) {
+  const keep = sel.value;
+  const opts = devs.map((d, i) => new Option(d.label || (d.deviceId && devs.length > 1 ? `${fallback.split(' ')[1]} ${i + 1}` : fallback), d.deviceId));
+  sel.replaceChildren(...(opts.length ? opts : [new Option(fallback, '')]));
+  if (opts.some(o => o.value === keep)) sel.value = keep;
+}
+
+async function applySink() {
+  if (!ctx || !canSink) return;
+  const id = $('outDev').value;
+  try {
+    await ctx.setSinkId(id === 'default' ? '' : id);
+    status(`Output: ${$('outDev').selectedOptions[0]?.text}`);
+  } catch (e) {
+    status(`Could not switch output: ${e.message}`);
+  }
+}
+
+// ---------- UI ----------
+$('mode').onchange = () => {
+  const b = $('mode').value === 'B';
+  $('modeA').classList.toggle('hidden', b);
+  $('modeB').classList.toggle('hidden', !b);
+  if (b) { detachA(); status('Pick a loopback/monitor input, or share a tab/screen with audio.'); }
+  else { stopCapture(); status('Pick an audio file.'); }
+};
+
+$('file').onchange = () => {
+  const f = $('file').files[0];
+  if (!f) return;
+  const el = $('audio');
+  if (el.src) URL.revokeObjectURL(el.src);
+  el.src = URL.createObjectURL(f);
+  attachA();
+  el.play().catch(e => status(`Playback failed: ${e.message}`));
+};
+$('audio').onplay = attachA;
+$('outDev').onchange = () => { audio(); applySink(); };
+
+$('unlock').onclick = async () => {
+  try {
+    (await md.getUserMedia({ audio: true })).getTracks().forEach(t => t.stop());
+    await listDevices();
+    status('Device names visible.');
+  } catch (e) {
+    status(`Permission denied: ${e.message}`);
+  }
+};
+
+$('capture').onclick = () => {
+  const id = $('inDev').value;
+  startCapture(() => md.getUserMedia({ audio: {
+    deviceId: id ? { exact: id } : undefined,
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, // voice processing mangles music
+  } }), $('inDev').selectedOptions[0]?.text);
+};
+$('share').onclick = () => {
+  if (!md?.getDisplayMedia) return status('This browser cannot capture tab/system audio.');
+  // video is required by Chrome's picker; we only read the audio track
+  startCapture(() => md.getDisplayMedia({ video: true, systemAudio: 'include',
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }), 'shared tab/screen audio');
+};
+$('stop').onclick = () => { stopCapture(); status('Stopped.'); };
+
+const TOL_PRESETS = ['Blur', 'SwitchBlur', 'Shift', 'Linear Shift', 'Stretch Shift', 'SuperStar', 'WonderWave', "Shift O' Scope", 'Funktional', 'Bass Bounce'];
+$('preset').replaceChildren(...TOL_PRESETS.map((n, i) => new Option(n, i)));
+$('preset').onchange = clearFeedback;
+
+const effects = ['bars', 'scope', 'ambience', 'tolerance', 'alchemy'];
+$('effect').onchange = () => {
+  const fx = $('effect').value, webgl = fx === 'ambience' || fx === 'tolerance';
+  $('cgl').classList.toggle('hidden', !webgl);
+  $('c2d').classList.toggle('hidden', webgl);
+  $('presetWrap').classList.toggle('hidden', fx !== 'tolerance');
+  clearFeedback(); // the WebGL effects store different data in the shared buffers
+  g.fillStyle = '#000'; // scope only fades the canvas, so wipe what the previous effect drew
+  g.fillRect(0, 0, W, H);
+};
+addEventListener('keydown', e => {
+  if (e.target.closest('select, input, audio')) return;
+  if (effects[e.key - 1]) { $('effect').value = effects[e.key - 1]; $('effect').onchange(); }
+  if (e.key === 'h') $('panel').classList.toggle('hidden');
+  if (e.key === 'n') ALC.sim?.next(); // Alchemy: change the warp now
+  if (e.key === 'f') toggleFs();
+});
+const toggleFs = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+addEventListener('dblclick', e => { if (!e.target.closest('#panel')) toggleFs(); });
+
+// ---------- bars + scope (canvas 2D) ----------
+const c2d = $('c2d'), g = c2d.getContext('2d'), cgl = $('cgl');
+let W = 0, H = 0, dpr = 1;
+
+const NBARS = 64;
+let bars = [];
+const peaks = new Float32Array(NBARS), peakV = new Float32Array(NBARS);
+
+function buildBars(rate, bins) { // log-spaced bands, 40 Hz .. 16 kHz, each at least one FFT bin
+  const lo = 40, hi = Math.min(16000, rate / 2), hz = rate / 2 / bins;
+  bars = [];
+  for (let i = 0; i < NBARS; i++) {
+    const a = Math.floor(lo * (hi / lo) ** (i / NBARS) / hz);
+    const b = Math.max(a + 1, Math.ceil(lo * (hi / lo) ** ((i + 1) / NBARS) / hz));
+    bars.push([a, Math.min(b, bins)]);
+  }
+  console.assert(bars.every(([a, b]) => a < b && b <= bins), 'bad bar ranges', bars);
+}
+buildBars(48000, 1024);
+
+const levels = new Float32Array(NBARS);
+function bandLevels() { // 0..1 per log-spaced band
+  for (let i = 0; i < NBARS; i++) {
+    const [a, b] = bars[i];
+    let v = 0;
+    for (let k = a; k < b; k++) v = Math.max(v, freq[k]);
+    levels[i] = v / 255;
+  }
+  return levels;
+}
+
+function drawBars(dt) {
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, W, H);
+  const slot = W / NBARS, bw = slot * 0.82;
+  const grad = g.createLinearGradient(0, H, 0, H * 0.1);
+  grad.addColorStop(0, '#0b2cff'); grad.addColorStop(0.55, '#00c8ff'); grad.addColorStop(1, '#e8fbff');
+  const lv = bandLevels();
+  for (let i = 0; i < NBARS; i++) {
+    const h = lv[i] * H * 0.85, x = i * slot + (slot - bw) / 2;
+    g.fillStyle = grad;
+    g.fillRect(x, H - h, bw, h);
+    if (h >= peaks[i]) { peaks[i] = h; peakV[i] = 0; }
+    else { peakV[i] += H * 1.5 * dt; peaks[i] = Math.max(h, peaks[i] - peakV[i] * dt); } // caps fall with gravity
+    g.fillStyle = '#fff';
+    g.fillRect(x, H - peaks[i] - 4 * dpr, bw, 3 * dpr);
+  }
+}
+
+function drawScope(t) {
+  g.fillStyle = 'rgba(0,0,0,0.25)'; // partial clear leaves short trails
+  g.fillRect(0, 0, W, H);
+  const color = `hsl(${(t * 25) % 360} 100% 60%)`;
+  g.lineWidth = 2 * dpr; g.strokeStyle = color; g.shadowColor = color; g.shadowBlur = 12 * dpr;
+  g.beginPath();
+  for (let i = 0; i < wave.length; i++) {
+    const x = (i / (wave.length - 1)) * W, y = H / 2 + ((wave[i] - 128) / 128) * H * 0.4;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+  g.shadowBlur = 0;
+}
+
+// ---------- alchemy (CPU simulation of the original's behaviour; see ALCHEMY.md) ----------
+// One 384×288 XRGB image is the whole state: each tick it is copied through the Composite warp's remap table, then the
+// drawing effects plot waveform lines and balls onto it. Nothing fades it. Hover only zooms what is shown.
+function makeAlchemy(W = 384, H = 288) {
+  const N = W * H, PI = Math.PI, tr = Math.trunc;
+  const rnd = v => v <= 0 ? tr(v - .5) : tr(v + .5);            // the original's round-half-away
+  const ri = n => Math.random() * n | 0;                         // rand() % n
+  const rint = (a, b) => a + ri(b - a + 1);                      // inclusive
+  const rf = (a, b) => a + Math.random() * (b - a);
+  const minOf = (k, a, b) => { let m = b; while (k--) m = Math.min(m, rint(a, b)); return m; };
+  let img = new Uint32Array(N).fill(0xff000000), tmp = new Uint32Array(N);
+  const opt = { blur: true, flag48: false };                     // test switches; keep the defaults
+  const A = { f: null, w: null, bass: 0, treble: 0, beat: false, drop: false };
+
+  // colours: 0xRRGGBB ints; pixels are little-endian ABGR
+  const rgb = p => (p & 255) << 16 | p & 0xff00 | p >> 16 & 255;
+  const px = c => 0xff000000 | (c & 255) << 16 | c & 0xff00 | c >> 16 & 255;
+  const lerpC = (a, b, t) => {                                   // a + (b − a)·t per channel
+    const ch = s => { const x = a >> s & 255; return x + rnd(((b >> s & 255) - x) * t) & 255; };
+    return ch(16) << 16 | ch(8) << 8 | ch(0);
+  };
+  const randCol = () => Math.random() * 0xffffff | 0;
+  const cset = (s, a, b, T, mult) => {
+    if (T <= 0) T = ri(100) + 1;
+    s.f = 0; s.mult = mult; s.bounce = mult > 1; s.T = mult > 1 ? T / mult | 0 : T; s.cur = s.a = a; s.b = b;
+  };
+  const cslot = () => { const s = { a: randCol(), b: randCol(), f: 0, T: 0, mult: 1, bounce: false }; s.cur = s.a; return s; };
+  const cstep = s => {                                           // ease a→b over T steps, then bounce or pick anew
+    if (++s.f <= s.T) s.cur = lerpC(s.a, s.b, Math.sin(s.f / s.T * PI / 2));
+    else if (s.bounce) cset(s, s.b, s.a, s.T * s.mult, s.mult);
+    else cset(s, s.cur, randCol(), ri(100), 1);
+  };
+
+  // ---- pen: waveform-wobbled lines ----
+  const pen = () => ({ mode: 0, alpha: .1, samples: 100, amp: 50, env: 0, loops: 2, mirror: false, m: 0, g: cslot(), c: 0 });
+  const penSet = (p, ca, cb, k, mode, alpha, samples, amp, env, loops) => {
+    cset(p.g, ca, cb, 1, k);
+    p.k = k; p.mode = mode; p.alpha = alpha; p.samples = samples; p.amp = amp; p.env = env; p.loops = loops;
+    if (mode < 3) p.m = [0, 1, 9][mode];                         // clip margin; mode 3 keeps the last one
+  };
+  const plot = (p, x, y) => {
+    if (x < 1 || y < 1 || x > W - 2 || y > H - 2) return;
+    const i = y * W + x, c = p.c;
+    if (p.mode === 0) { img[i] = px(lerpC(c, rgb(img[i]), .9)); return; }
+    const t = p.mode === 1 ? .3 : p.alpha;
+    img[i] = px(c);
+    for (const j of [i + 1, i - 1, i + W, i - W]) img[j] = px(lerpC(c, rgb(img[j]), t));
+  };
+  const seg = (p, x0, y0, x1, y1) => {                           // Bresenham, end point excluded, clipped to the margin
+    const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0), sx = x1 < x0 ? -1 : 1, sy = y1 < y0 ? -1 : 1;
+    const n = Math.max(dx, dy), m = p.m;
+    if (n > 4 * (W + H)) return;                                 // shortcut: absurd segments are dropped, not clipped
+    let e = 0;
+    for (let s = 0; s < n; s++) {
+      if (x0 >= m && y0 >= m && x0 < W - m && y0 < H - m) plot(p, x0, y0);
+      if (dx > dy) { x0 += sx; if ((e += dy) > dx) { e -= dx; y0 += sy; } }
+      else { y0 += sy; if ((e += dx) > dy) { e -= dy; x0 += sx; } }
+    }
+  };
+  const level = (p, i, n) => {
+    const h = n >> 1, j = i > h ? 2 * h - i : i;                 // folded: the trace is symmetric about its middle
+    let v = p.amp / 128 * ((A.w[j] ?? 128) - 128);
+    if (p.env === 0) v *= Math.abs(Math.sin(i / n * p.loops * PI));
+    else if (p.env === 1) v *= (i >= h ? 2 * h - i : i) / h;
+    return v;
+  };
+  const line = (p, ax, ay, bx, by) => {
+    const dx = bx - ax, dy = by - ay, n = Math.min(p.samples, Math.max(Math.abs(dx), Math.abs(dy)) + 1);
+    const a = Math.atan2(dy, dx) + PI / 2, c = Math.cos(a), s = Math.sin(a);
+    p.g.T = Math.max(1, n / p.k | 0); p.g.f = 0; p.g.cur = p.g.a; // the gradient bounces k times along the line
+    let l = level(p, 0, n), x = rnd(ax + c * l), y = rnd(ay + s * l), mx = rnd(ax - c * l), my = rnd(ay - s * l);
+    for (let i = 1; i < n; i++) {
+      p.c = p.g.cur; cstep(p.g);
+      const t = i / n, cx = dx * t + ax, cy = dy * t + ay;
+      l = level(p, i, n);
+      const x1 = rnd(cx + c * l), y1 = rnd(cy + s * l);
+      seg(p, x, y, x1, y1); x = x1; y = y1;
+      if (p.mirror) { const x2 = rnd(cx - c * l), y2 = rnd(cy - s * l); seg(p, mx, my, x2, y2); mx = x2; my = y2; }
+    }
+  };
+  const lineThrough = (p, cx, cy, a, len) => {
+    const h = len / 2;
+    line(p, cx + rnd(Math.cos(a) * h), cy + rnd(Math.sin(a) * h), cx + rnd(Math.cos(a + PI) * h), cy + rnd(Math.sin(a + PI) * h));
+  };
+
+  // ---- Composite warps: each maps a destination pixel to a source pixel, written to X, Y ----
+  let X = 0, Y = 0;
+  const cx0 = W >> 1, cy0 = H >> 1, halfDiag = Math.sqrt(W * W + H * H) / 2;
+  function shiftWarp() {
+    let dx, dy;
+    do { dx = ri(7) - 3; dy = ri(7) - 3; } while (!dx && !dy);
+    const st = ri(3) !== 0, s1 = rf(0, .1), s2 = rf(0, .1), edge = ri(8), wob = ri(3), k = ri(15) + 1;
+    const L = x => tr((s1 + 1) * x), T = y => tr((s2 + 1) * y);
+    const R = x => x - tr((s1 + 1) * (W - x - 1) - (W - x - 1)), B = y => y - tr((s2 + 1) * (H - y - 1) - (H - y - 1));
+    return { keep: false, comb: true, refl: false, map(x, y) {
+      if (st) {
+        if (edge === 0) x = L(x); else if (edge === 1) y = T(y); else if (edge === 2) x = R(x); else if (edge === 3) y = B(y);
+        else if (edge === 4) { x = L(x); y = T(y); } else if (edge === 5) { x = R(x); y = B(y); }
+        else if (edge === 6) { x = L(x); y = B(y); } else { x = R(x); y = T(y); }
+      } else { x += dx; y += dy; }
+      if (wob === 1) x += rnd(Math.sin(y / H * k * PI) * 3 * dy);
+      else if (wob === 2) y += rnd(Math.sin(x / W * k * PI) * 3 * dx);
+      X = x; Y = y;
+    } };
+  }
+  function swirlWarp() {
+    const sine = ri(2) === 0, k = ri(15) + 1, rot = sine ? rf(-.22, .22) : rf(-.1, .1), K = tr(H * rf(.05, .3));
+    const own = ri(2) === 0, ox = tr(W * rf(.05, .95)), oy = tr(H * rf(.05, .95));
+    const maxR = Math.max(Math.hypot(ox, oy), Math.hypot(W - ox, oy), Math.hypot(W - ox, H - oy), Math.hypot(ox, H - oy));
+    const cx = own ? ox : cx0, cy = own ? oy : cy0;
+    return { keep: true, comb: true, refl: false, map(x, y) {
+      const dx = x - cx, dy = y - cy, r = Math.sqrt(dx * dx + dy * dy), q = r / maxR, r2 = r - K * q * q * q;
+      const a = Math.atan2(dy, dx) + (sine ? Math.sin(k * q * PI) * rot : q * rot);
+      X = cx + tr(Math.cos(a) * r2); Y = cy + tr(Math.sin(a) * r2);
+    } };
+  }
+  function blockWarp() {
+    const T = ri(40) + 1, s = ri(4) + 1, vOnly = ri(4) === 0, P = 2 * T;
+    return { keep: true, comb: true, refl: false, map(x, y) {
+      const bx = x % P, by = y % P;
+      X = x; Y = y;
+      if (vOnly) Y = bx <= T ? y - s : y + s;
+      else if (by > T) { if (W - x >= T || bx <= by - T) X = x + s; else Y = y + s; }
+      else if (x < T && bx > by) Y = y + s;
+      else X = x - s;
+    } };
+  }
+  function reflectWarp() {
+    const mode = ri(4), sub = ri(2) === 0 ? swirlWarp() : shiftWarp(), R = ri(250) + 5, m = ri(25) + 1;
+    const cell = Math.max(1, tr((cx0 - R) / m));                 // shortcut: the original divides by 0 when R >= W/2
+    const mirror4 = (x, y) => {
+      let f = false;
+      if (x > cx0) { x = W - x; f = true; }
+      if (y > cy0) { y = H - y; f = true; }
+      if (f) { X = x; Y = y; } else sub.map(x, y);
+    };
+    return { keep: false, comb: false, refl: true, map(x, y) {
+      if (mode === 0) return mirror4(x, y);
+      if (mode === 1) {
+        let foldY = true;
+        if (y * W >= x * H) {
+          if (y * W >= H * (W - x)) { y = H - y; if (x > cx0) x = 2 * cx0 - x; foldY = false; }
+          else x = cx0 - x;
+        } else {
+          if (y * W < H * (W - x)) { if (x < cx0) return sub.map(x, y); x = 2 * cx0 - x; foldY = false; }
+          else x = W + cx0 - x;
+        }
+        if (foldY) y = y >= cy0 ? y - cy0 : cy0 - y;
+        X = x; Y = y; return;
+      }
+      if (mode === 2) {
+        if (Math.hypot(cx0 - x, cy0 - y) > R) {
+          const z = 2 * R / cell;
+          X = cx0 - R + rnd(x % (cell + 2) * z); Y = cy0 - R + rnd(y % (cell + 2) * z);
+        } else sub.map(x, y);
+        return;
+      }
+      const dx = x - cx0, dy = y - cy0, r = Math.sqrt(dx * dx + dy * dy), q = halfDiag / 2;
+      if (tr(r) / tr(q) | 0) {                                   // beyond a quarter diagonal: mirror in that circle
+        const a = Math.atan2(dy, dx), r2 = 2 * q - r;
+        X = cx0 + tr(Math.cos(a) * r2); Y = cy0 + tr(Math.sin(a) * r2);
+      } else mirror4(x, y);
+    } };
+  }
+  const WARPS = [reflectWarp, reflectWarp, shiftWarp, shiftWarp, swirlWarp, swirlWarp, blockWarp, blockWarp];
+
+  const comp = { w: null, fromX: new Int16Array(N), fromY: new Int16Array(N), toX: new Int16Array(N), toY: new Int16Array(N),
+                 map: new Int32Array(N), k: 22, f: 0, T: 1, mode: 0, used: new Set() };
+  const pickWarp = () => {                                       // a random child not in use, re-randomised
+    for (let t = 0; t < 100; t++) { const i = ri(8); if (!comp.used.has(i)) { comp.used.add(i); return { i, w: WARPS[i]() }; } }
+    return null;
+  };
+  const build = (w, OX, OY) => {
+    const [a, b] = w;
+    for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i++) {
+      a.w.map(x, y);
+      let u = X >>> 0 < W ? X : a.w.keep ? x : 0, v = Y >>> 0 < H ? Y : a.w.keep ? y : 0;
+      if (b) {
+        b.w.map(u, v);
+        u = (X >>> 0 < W ? X : b.w.keep ? u : 0) + x >> 1; v = (Y >>> 0 < H ? Y : b.w.keep ? v : 0) + y >> 1;
+      }
+      OX[i] = u; OY[i] = v;
+    }
+  };
+  const setMap = k => {                                          // step k of 22 between the old and the new table
+    const { fromX: fx, fromY: fy, toX: tx, toY: ty, map } = comp, f = k >= 22 ? 1 : (k + 1) / 23;
+    for (let i = 0; i < N; i++) map[i] = (fy[i] + tr((ty[i] - fy[i]) * f)) * W + fx[i] + tr((tx[i] - fx[i]) * f);
+  };
+  function changeWarp() {
+    const w1 = pickWarp(); if (!w1) return;
+    let w = [w1];
+    if (ri(5) === 0) { const w2 = pickWarp(); if (w2 && w1.w.comb && w2.w.comb) w.push(w2); else if (w2) comp.used.delete(w2.i); }
+    const first = !comp.w;
+    if (!first) {                                                // start from what is on screen now
+      for (let i = 0; i < N; i++) { comp.fromX[i] = comp.map[i] % W; comp.fromY[i] = comp.map[i] / W | 0; }
+      for (const o of comp.w) comp.used.delete(o.i);
+    }
+    build(w, comp.toX, comp.toY);
+    const refl = w.some(o => o.w.refl) || (comp.w ?? []).some(o => o.w.refl);
+    comp.w = w; comp.mode = minOf(3, 0, 2); comp.T = refl ? 1 : ri(3) ? ri(5) + 10 : ri(15) + 1; comp.f = 0;
+    comp.k = first || opt.flag48 ? 22 : 0;                       // the unknown flag also skips the 22-step transition
+    setMap(comp.k);
+  }
+  const composite = { cat: 3, w: 1, randomise: changeWarp, render() {
+    if (!comp.w) changeWarp();
+    if (comp.k < 22) {
+      const k0 = comp.k, T = comp.T;
+      if (comp.mode === 0) { const f = comp.f++; comp.k = f <= 22 * T ? Math.max(0, tr(Math.sin((f + 1) / (22 * T) * PI / 2) * 22)) : 22; }
+      else if (comp.mode === 1) { if (comp.f++ % T === 0) comp.k++; }
+      else if (ri(T) === 0) comp.k++;
+      if (comp.k !== k0) setMap(comp.k);
+    }
+    if (opt.flag48) return;                                      // flag set: the original copies nothing, the image stands still
+    const m = comp.map;
+    for (let i = 0; i < N; i++) tmp[i] = img[m[i]];
+    if (opt.blur) blur(tmp, img); else [img, tmp] = [tmp, img]; // blur off is a test mode only, the code has no such path
+  } };
+  // the copy is blurred on the way: (3·avg(4 neighbours) + centre) / 4 per
+  // channel, floored, with neighbours taken in the linear buffer (wrapping at row and image ends), like the original
+  const M = 0x00ff00ff;
+  const blur = (s, o) => {
+    for (let i = 0; i < N; i++) {
+      const l = s[i ? i - 1 : N - 1], r = s[i + 1 < N ? i + 1 : 0], u = s[i >= W ? i - W : i - W + N], d = s[i + W < N ? i + W : i + W - N], c = s[i];
+      let lo = ((l & M) + (r & M) + (u & M) + (d & M)) >>> 2 & M;
+      let hi = ((l >>> 8 & M) + (r >>> 8 & M) + (u >>> 8 & M) + (d >>> 8 & M)) >>> 2 & M;
+      lo = 3 * lo + (c & M) >>> 2 & M;
+      hi = 3 * hi + (c >>> 8 & M) >>> 2 & M;
+      o[i] = 0xff000000 | (hi & 0xff) << 8 | lo;
+    }
+  };
+
+  // ---- drawing effects ----
+  const ocean = { cat: 4, w: 1, p: pen(), c1: cslot(), c2: cslot(), angle: 0, angle2: 0, randomise() {
+    Object.assign(this, { mode: ri(3), points: ri(512) + 10, env: minOf(3, 0, 2), loops: ri(4) + 1, amp: rf(.1, .425),
+      spin: rf(-.13, .13), spinMode: ri(4), flex: ri(2) === 0, mirror: ri(3) === 0, cross: ri(3) === 0, crossMode: ri(3),
+      angle2: rf(-PI / 2, PI / 2) });
+  }, render() {
+    const p = this.p, b = A.bass;
+    cstep(this.c1); cstep(this.c2);
+    penSet(p, this.c2.cur, this.c1.cur, 2 * this.loops, this.mode, .1, this.points, tr(H * this.amp), this.env, this.loops);
+    p.mirror = this.mirror;
+    const len = Math.hypot(W, H) * (this.flex ? b : 1);
+    lineThrough(p, cx0, cy0, this.angle + PI / 2, len);
+    if (this.cross) {
+      if (this.crossMode === 0) this.angle2 -= this.spin * b * .5;
+      lineThrough(p, cx0, cy0, this.crossMode === 2 ? this.angle : this.angle2 + this.angle, len);
+    }
+    this.angle += this.spinMode === 0 ? b * b * this.spin : this.spinMode === 1 ? this.spin * b : this.spinMode === 2 ? this.spin : 0;
+  } };
+  const scale = { cat: 4, w: .5, p: pen(), c1: cslot(), c2: cslot(), th: 0, randomise() {
+    this.size = rf(.2, 1); this.n = ri(10) + 3; this.spin = rf(-.2, .2);
+  }, render() {
+    const n = this.n, R = A.bass * (H >> 1) * this.size, step = 2 * PI / n * ((n >> 1) + 1);
+    this.th += A.treble * this.spin;
+    if (this.th > 2 * PI) this.th -= 2 * PI;
+    let x0 = cx0 + tr(Math.cos(this.th) * R), y0 = cy0 + tr(Math.sin(this.th) * R), a = this.th;
+    cstep(this.c1); cstep(this.c2);
+    penSet(this.p, this.c1.cur, this.c2.cur, 3, 3, .5, 50, 50, 0, 2);
+    for (let i = 0; i <= n; i++) {
+      a += step;
+      const x1 = cx0 + tr(Math.cos(a) * R), y1 = cy0 + tr(Math.sin(a) * R);
+      line(this.p, x0, y0, x1, y1); x0 = x1; y0 = y1;
+    }
+  } };
+  const balls = { cat: 4, w: .9, p: pen(), c1: cslot(), c2: cslot(), vr: 0, invert: false, count: 0, randomise() {
+    Object.assign(this, { x: ri(W), y: ri(H), vx: rf(-2, 2), vy: rf(-2, 2), R1: rf(9, 30), damp: rf(.5, .9) });
+    this.r = this.R1;
+    cset(this.c1, randCol(), randCol(), ri(50) + 5, 1); cset(this.c2, randCol(), randCol(), ri(50) + 5, 1);
+  }, disc(cx, cy, r, w) {
+    const c1 = this.invert ? 0xffffff - this.c1.cur : this.c1.cur, c2 = this.c2.cur;
+    for (let x = cx - r, dx = -r; x <= cx + r; x++, dx++) for (let y = cy - r, dy = -r; y <= cy + r; y++, dy++) {
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const i = y * W + x, v = (r * r - (dy * dy + dx * dx)) / r;
+      let c = rgb(img[i]);
+      if (v >= 1) { c = lerpC(c1, c, Math.cos((v / r) ** 2 * PI / 2) * w); img[i] = px(c); }
+      if (v > -3.14 && v < 3.14) img[i] = px(lerpC(c, c2, (Math.cos(Math.abs(v)) + 1) / 2));
+    }
+  }, render() {
+    const b = A.bass;
+    this.x += this.vx; this.y += this.vy;
+    let hit = false;
+    if (this.x < 0 || this.x > W) { this.vx = -this.vx; hit = true; } else this.vx *= .8;
+    if (this.y < 0 || this.y > H) { this.vy = -this.vy; hit = true; } else this.vy *= .8;
+    if (!hit) { this.vx += (2 * ri(2) - 1) * b; this.vy += (2 * ri(2) - 1) * b; }
+    const ax = rnd(this.x), ay = rnd(this.y), bx = W - ax, by = H - ay;
+    this.vr = (this.vr + (this.R1 - this.r) + .8 * b) * this.damp;
+    this.r += this.vr;
+    const rd = tr(this.r) + 1;
+    let w = b, ra = rd, rb = rd;
+    if (A.beat) { w = .4; this.invert = !this.invert; ra = rb = 2 * rd; this.count = 5; }
+    else if (this.count) ra = rnd(this.count * .4 * rd);
+    if (this.count) {
+      penSet(this.p, this.c1.cur, this.c2.cur, ri(6) + 1, 1, .3, 500, 50, 0, 2);
+      line(this.p, ax, ay, bx, by);
+      this.count--;
+    }
+    this.disc(ax, ay, ra, w); this.disc(bx, by, rb, w);
+    cstep(this.c1); cstep(this.c2);
+  } };
+
+  // ---- Hover: display-only zoom ----
+  const view = { s: 1 };
+  const hover = { cat: 7, w: .5, f: 0, randomise() { this.jump = rf(.13, .25); this.h = rf(.05, .2); this.period = rint(25, 55); },
+    render() {
+      if (A.drop && this.state !== 2) { view.s = this.jump; this.f = 0; }
+      let target = Math.sin(this.f % this.period / this.period * 2 * PI) * this.h + 1 - this.h, a = 15;
+      if (this.state === 2) { const u = 1 - this.progress / Math.max(1, this.ramp); target = target * u + 1 - u; a = 15 * u; }
+      view.s = Math.min(1, (target * (16 - a) + a * view.s) / 16);
+      this.f++;
+      this.on = true;
+    } };
+
+  // ---- scheduler: only the four slots whose category has effects ----
+  const FX = [composite, ocean, scale, hover, balls];
+  const SLOTS = [[3, 1, 1, 90, 500, 0], [4, 1, 2, 50, 350, 2], [4, 1, 3, 50, 350, 2], [7, 0, 1, 50, 400, 1]]
+    .map(([cat, lo, hi, d0, d1, fl]) => ({ cat, lo, hi, d0, d1, draws: fl & 2 ? 10 : fl & 1 ? 3 : 1, count: 0, active: [] }));
+  function fire(s) {
+    for (const e of s.active) e.used = false;
+    s.active = [];
+    let n = minOf(s.draws, s.lo, s.hi);
+    s.count = rint(s.d0, s.d1);
+    for (let t = 0; t < 100 && n > 0; t++) {
+      const e = FX[ri(FX.length)];
+      if (e.cat !== s.cat || e.used || Math.random() > e.w) continue;
+      e.randomise();
+      e.used = true; e.state = 1; e.progress = 0;
+      const r = rint(10, 90);
+      e.ramp = r < (s.count / 3 | 0) ? rint(10, 90) : s.count / 3 | 0;
+      s.active.push(e); n--;
+    }
+  }
+
+  // ---- audio ----
+  const hist = new Float64Array(30);
+  let hi = 0, sinceBeat = 0, sinceDrop = 0;
+  function listen(f, w) {
+    A.f = f; A.w = w;
+    // shortcut: one mono analyser stands in for WMP's two channels; browser bins are dB-scaled, not calibrated yet
+    A.bass = (f[1] + f[2] + f[3] + f[4] + f[5] + f[6]) / 1200;
+    A.treble = (f[501] + f[502] + f[503] + f[504] + f[505] + f[506]) / 600;
+    hist[hi++ % 30] = A.bass;
+    const avg = hist.reduce((s, v) => s + v) / 30;
+    sinceBeat++; sinceDrop++;
+    A.beat = sinceBeat >= 10 && A.bass > 1.1 * avg;
+    A.drop = A.beat && A.bass > .9 && A.bass > 1.2 * avg && sinceDrop > 20;
+    if (A.beat) sinceBeat = 0;
+    if (A.drop) sinceDrop = 0;
+  }
+
+  function tick(f, w) {
+    listen(f, w);
+    hover.on = false;
+    for (const s of SLOTS) {
+      if (--s.count <= 0) fire(s);
+      for (const e of s.active) {
+        e.render();
+        if (e.state === 1) { if (e.progress++ >= e.ramp) { e.state = 0; e.progress = 0; } }
+        else if (e.state === 2) e.progress++;
+        else if (s.count <= e.ramp) e.state = 2;
+      }
+    }
+  }
+  const rect = () => {                                           // the source rectangle shown on screen
+    if (!hover.on) return [0, 0, W, H];
+    const l = tr(W - W * view.s) / 2 | 0, t = tr(H - H * view.s) / 2 | 0;
+    return [l, t, W - 2 * l, H - 2 * t];
+  };
+  const paste = (src, sw, sh) => {                               // carry an image over from another size (nearest pixel)
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) img[y * W + x] = src[(y * sh / H | 0) * sw + (x * sw / W | 0)];
+  };
+  return { W, H, tick, rect, paste, opt, get img() { return img; }, next: changeWarp, audio: A };
+}
+
+const ALC = { fps: 16, acc: 0, sim: null, canvas: document.createElement('canvas'), data: null, sized: 0 };
+function drawAlchemy(dt) {
+  // the original renders at window size (its 384×288 mode looks 5× coarser than the recordings); every size and speed in
+  // it is in pixels, so a smaller buffer makes balls look bigger and jumpier
+  // shortcut: capped at 1280 px wide for CPU cost (≈11 ms/tick there, 25 ms at 1080p), so balls look up to 1.5× bigger
+  const sc = Math.min(1, 1280 / innerWidth), w = Math.max(64, innerWidth * sc | 0), h = Math.max(48, innerHeight * sc | 0);
+  const old = ALC.sim, now = performance.now();
+  if (old && (old.W !== w || old.H !== h)) { if (!ALC.sized) ALC.sized = now; } else ALC.sized = 0;
+  if (!old || ALC.sized && now - ALC.sized > 300) {           // while resizing, stretch the old buffer; then rebuild once
+    ALC.sim = makeAlchemy(w, h);
+    if (old) ALC.sim.paste(old.img, old.W, old.H);               // keep the picture across the resize
+    ALC.canvas.width = w; ALC.canvas.height = h;
+    ALC.data = new ImageData(w, h);
+    ALC.sized = 0; ALC.acc = 1;
+  }
+  ALC.acc = Math.min(ALC.acc + dt * ALC.fps, 2);                 // fixed 16 ticks/s; every count in the original is in ticks
+  if (ALC.acc >= 1) {
+    for (; ALC.acc >= 1; ALC.acc--) ALC.sim.tick(freq, wave);
+    new Uint32Array(ALC.data.data.buffer).set(ALC.sim.img);
+    ALC.canvas.getContext('2d').putImageData(ALC.data, 0, 0);
+  }
+  const [sx, sy, sw, sh] = ALC.sim.rect();                      // drawn every frame: a resize clears the visible canvas
+  g.imageSmoothingEnabled = true;
+  g.drawImage(ALC.canvas, sx, sy, sw, sh, 0, 0, W, H);
+}
+
+// ---------- ambience (WebGL feedback) ----------
+const VS = `attribute vec2 p; varying vec2 uv; void main(){ uv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
+const WARP_FS = `precision mediump float;
+uniform sampler2D prev, wave;
+uniform vec2 res;
+uniform float t, bass, treble, beat;
+varying vec2 uv;
+vec3 hue(float h) { return clamp(abs(mod(h * 6. + vec3(0., 4., 2.), 6.) - 3.) - 1., 0., 1.); }
+void main() {
+  float asp = res.x / res.y;
+  vec2 p = (uv - .5) * vec2(asp, 1.);
+  float r = length(p);
+  // last frame, sampled slightly zoomed + swirled: the image flows outward and twists
+  float rot = .01 + .03 * sin(t * .17) + .02 * (1. - r) + .03 * treble;
+  float zoom = .985 - .06 * bass - .03 * beat;
+  vec2 q = mat2(cos(rot), -sin(rot), sin(rot), cos(rot)) * p * zoom;
+  q += .004 * vec2(sin(q.y * 9. + t * 1.3), cos(q.x * 7. - t * 1.1));
+  vec3 col = texture2D(prev, q / vec2(asp, 1.) + .5).rgb;
+  col = col * .955 - 1. / 255.; // the constant stops 8-bit trails from never reaching black
+  // new ink: a ring whose radius follows the waveform (mirrored angle = no seam)
+  float a = abs(atan(p.y, p.x)) / 3.14159;
+  float w = texture2D(wave, vec2(a, .5)).r - .5;
+  float d = abs(r - (.15 + .25 * bass + .35 * w));
+  col += hue(t * .07 + a * .5 + bass) * (1. - smoothstep(0., .012, d)) * (.5 + beat);
+  gl_FragColor = vec4(clamp(col, 0., 1.), 1.);
+}`;
+const SHOW_FS = `precision mediump float; uniform sampler2D img; varying vec2 uv;
+void main() { gl_FragColor = texture2D(img, uv); }`;
+
+// Tolerance: one brightness channel is fed back through a per-preset move + blur, then coloured by a cycling palette
+const TOL_FS = `precision mediump float;
+uniform sampler2D prev, wave, spec;
+uniform vec2 res;
+uniform float t, bass, treble, beat, preset, flip;
+varying vec2 uv;
+float W(float x) { return texture2D(wave, vec2(x, .5)).r - .5; }
+float S(float x) { return texture2D(spec, vec2(x * .35, .5)).r; } // most musical energy sits in the lower third
+float ink(float d, float w) { return 1. - smoothstep(0., w, d); }
+vec2 rot(vec2 v, float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)) * v; }
+// distance to the trace across = W(along) * k, divided by its slope so steep parts don't break into dashes
+float trace(float along, float across, float stepA, float stepC, float k) {
+  float s = (W(along + stepA) - W(along - stepA)) * k / (2. * stepC);
+  return abs(across - W(along) * k) / sqrt(1. + s * s);
+}
+void main() {
+  vec2 px = 1. / res, c = uv - .5, asp = vec2(res.x / res.y, 1.);
+  vec2 q = uv; // where this pixel reads the previous frame
+  float decay = .95, a = 0.;
+  float r = length(c * asp), ang = abs(atan(c.y, c.x * asp.x)) / 3.14159; // mirrored angle: no seam
+  float scope = ink(trace(uv.x, c.y, px.x, px.y, .7), .008);
+  float ring = ink(abs(r - .12 - .25 * bass - .3 * W(ang)), .01);
+  if (preset < .5) {        // Blur: trails diffuse in place
+    decay = .975; a = scope;
+  } else if (preset < 1.5) { // SwitchBlur: drift flips direction on every beat
+    q.y += flip * 2. * px.y; decay = .97; a = scope;
+  } else if (preset < 2.5) { // Shift: everything scrolls up
+    q.y -= (2. + 6. * bass) * px.y; a = scope;
+  } else if (preset < 3.5) { // Linear Shift: slides sideways out of the centre
+    q.x -= sign(c.x) * (2. + 6. * bass) * px.x;
+    a = ink(trace(uv.y, c.x, px.y, px.x, .5), .006);
+  } else if (preset < 4.5) { // Stretch Shift: zooms out of the centre
+    q = .5 + c * (.985 - .05 * bass); a = scope;
+  } else if (preset < 5.5) { // SuperStar: spinning burst, spectrum drawn as spikes
+    q = .5 + rot(c * asp, .03 + .05 * treble) * .96 / asp;
+    a = ink(abs(r - .04 - .4 * S(ang)), .008);
+  } else if (preset < 6.5) { // WonderWave: rippling water distortion
+    q += vec2(sin(uv.y * 25. + t * 3.), cos(uv.x * 18. + t * 2.)) * px * (2. + 8. * bass);
+    a = scope;
+  } else if (preset < 7.5) { // Shift O' Scope: scope trails rise and widen into a landscape
+    q = vec2(.5 + c.x * 1.006, uv.y - 2.5 * px.y);
+    a = ink(trace(uv.x, uv.y - .2, px.x, px.y, .35), .006);
+  } else if (preset < 8.5) { // Funktional: mirrored, rotating kaleidoscope
+    q = .5 + rot(abs(rot(c * asp, t * .1)), .02) * .98 / asp; a = ring;
+  } else {                   // Bass Bounce: zoom kicks on every beat
+    q = .5 + c * (1. - .06 * beat - .02 * bass); decay = .93; a = ring;
+  }
+  // a 4-tap blur at the read point gives every preset its soft smear
+  float v = (texture2D(prev, q + vec2(px.x, 0.)).r + texture2D(prev, q - vec2(px.x, 0.)).r
+           + texture2D(prev, q + vec2(0., px.y)).r + texture2D(prev, q - vec2(0., px.y)).r) * .25;
+  v = max(v * decay - 1. / 255., a * (.7 + .3 * beat)); // the constant stops 8-bit trails from sticking
+  gl_FragColor = vec4(v, 0., 0., 1.);
+}`;
+const TOL_SHOW_FS = `precision mediump float;
+uniform sampler2D img;
+uniform float t, preset;
+varying vec2 uv;
+void main() {
+  float v = floor(texture2D(img, uv).r * 255.) / 255.; // 256 levels, like an 8-bit palette index
+  vec3 col = .5 + .5 * cos(6.28318 * (v * 1.2 + t * .05 + preset * .13 + vec3(0., .33, .67))); // palette rotates over time
+  gl_FragColor = vec4(col * smoothstep(0., .1, v), 1.); // index 0 stays black
+}`;
+
+const gl = cgl.getContext('webgl', { antialias: false });
+let progs = {}, texWave, texSpec, fbos = [], cur = 0;
+const locs = new Map();
+const loc = (p, n) => {
+  if (!locs.has(p)) locs.set(p, {});
+  const m = locs.get(p);
+  return n in m ? m[n] : (m[n] = gl.getUniformLocation(p, n));
+};
+
+function program(fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.bindAttribLocation(p, 0, 'p');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+function texture(w, h) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); // NPOT textures need clamp in WebGL1
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  if (w) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  return t;
+}
+
+function glResize() {
+  cgl.width = W; cgl.height = H;
+  fbos.forEach(f => { gl.deleteTexture(f.tex); gl.deleteFramebuffer(f.fb); });
+  fbos = [0, 1].map(() => {
+    const tex = texture(W, H), fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fb };
+  });
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+if (gl) {
+  progs = { ambience: [program(WARP_FS), program(SHOW_FS)], tolerance: [program(TOL_FS), program(TOL_SHOW_FS)] };
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW); // one screen-covering triangle
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  texWave = texture();
+  texSpec = texture();
+} else {
+  for (const v of ['ambience', 'tolerance']) $('effect').querySelector(`[value=${v}]`).disabled = true;
+}
+
+function clearFeedback() {
+  if (!gl) return;
+  gl.clearColor(0, 0, 0, 1);
+  for (const f of fbos) { gl.bindFramebuffer(gl.FRAMEBUFFER, f.fb); gl.clear(gl.COLOR_BUFFER_BIT); }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function setUniforms(p, u) { // uniforms a shader doesn't declare have no location and are skipped
+  for (const [n, unit] of [['prev', 0], ['img', 0], ['wave', 1], ['spec', 2]]) { const l = loc(p, n); if (l) gl.uniform1i(l, unit); }
+  for (const [n, v] of Object.entries(u)) {
+    const l = loc(p, n);
+    if (l) Array.isArray(v) ? gl.uniform2f(l, ...v) : gl.uniform1f(l, v);
+  }
+}
+
+function upload(unit, tex, data) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  if (data) gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, data.length, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+}
+
+function drawFeedback(name, u) { // pass 1: previous frame -> warped + new ink; pass 2: show it
+  const [warp, show] = progs[name], src = fbos[cur], dst = fbos[cur ^= 1];
+  gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
+  gl.useProgram(warp);
+  upload(0, src.tex);
+  if (loc(warp, 'wave')) upload(1, texWave, wave); // skip uploads the shader doesn't read
+  if (loc(warp, 'spec')) upload(2, texSpec, freq);
+  setUniforms(warp, u);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.useProgram(show);
+  upload(0, dst.tex);
+  setUniforms(show, u);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ---------- main loop ----------
+function resize() {
+  dpr = Math.min(devicePixelRatio || 1, 2);
+  W = Math.max(1, innerWidth * dpr | 0); H = Math.max(1, innerHeight * dpr | 0);
+  c2d.width = W; c2d.height = H;
+  if (gl) glResize();
+}
+addEventListener('resize', resize);
+resize();
+
+const band = (f0, f1) => { // mean level 0..1 of a frequency band
+  const hz = (ctx?.sampleRate ?? 48000) / 2 / freq.length;
+  const a = Math.floor(f0 / hz), b = Math.max(a + 1, Math.ceil(f1 / hz));
+  let s = 0;
+  for (let k = a; k < b; k++) s += freq[k];
+  return s / (b - a) / 255;
+};
+
+let last = performance.now(), bassAvg = 0, beat = 0, flip = 1;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000), t = now / 1000;
+  last = now;
+  if (analyser) { analyser.getByteFrequencyData(freq); analyser.getByteTimeDomainData(wave); }
+  const bass = band(20, 150), treble = band(4000, 12000);
+  bassAvg += (bass - bassAvg) * 0.05;
+  const hit = bass > 0.3 && bass > bassAvg * 1.3; // simple energy-spike beat detector
+  if (hit && beat < 1) flip = -flip; // once per beat onset
+  beat = hit ? 1 : beat * 0.9;
+
+  const fx = $('effect').value;
+  if (fx === 'ambience' || fx === 'tolerance')
+    drawFeedback(fx, { res: [W, H], t, bass, treble, beat, flip, preset: +$('preset').value });
+  else if (fx === 'alchemy') drawAlchemy(dt);
+  else if (fx === 'scope') drawScope(t);
+  else drawBars(dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------- start ----------
+if (md) { listDevices(); md.addEventListener('devicechange', listDevices); }
+if (!canSink) { $('outDev').disabled = true; $('outDev').title = 'Output selection for Web Audio needs Chrome/Edge 110+'; }
+status(canSink ? 'Pick an audio file. Double-click or press F for fullscreen, 1-5 switch effects, N = next Alchemy warp, H hides this panel.'
+               : 'This browser plays on the default output only (output picking needs Chrome/Edge). Pick an audio file.');
+</script>
+</body>
+</html>
