@@ -19,6 +19,11 @@
   audio { width: 100%; height: 32px; }
   #status { color: var(--muted); font-size: 12px; min-height: 1em; }
   .hidden { display: none !important; }
+  #panel { padding-right: 44px; }
+  #min { position: absolute; top: 8px; right: 8px; line-height: 1; }
+  #panel.min { right: auto; padding: 6px; }
+  #panel.min > :not(#min) { display: none; }
+  #panel.min #min { position: static; }
 </style>
 </head>
 <body>
@@ -26,10 +31,11 @@
 <canvas id="cgl" class="hidden"></canvas>
 
 <div id="panel">
+  <button id="min" title="Minimize panel (H hides it completely)" aria-label="Minimize panel" aria-expanded="true">–</button>
   <div class="row">
     <label>Source <select id="mode">
-      <option value="A">A · Play a file here (pick output)</option>
-      <option value="B">B · Capture system / loopback audio</option>
+      <option value="A">A · Play a file here</option>
+      <option value="B">B · Visualize what this computer is playing</option>
     </select></label>
     <label>Effect <select id="effect">
       <option value="bars">Bars</option>
@@ -42,14 +48,14 @@
   </div>
   <div id="modeA" class="row">
     <input type="file" id="file" accept="audio/*">
-    <label>Output <select id="outDev"></select></label>
+    <label>Play file on <select id="outDev"></select></label>
     <button id="unlock" title="Browsers hide device names until a microphone permission is granted">Show device names</button>
     <audio id="audio" controls></audio>
   </div>
   <div id="modeB" class="row hidden">
-    <label>Input <select id="inDev"></select></label>
+    <label>Loopback input <select id="inDev"></select></label>
     <button id="capture">Capture input</button>
-    <button id="share">Share tab / system audio</button>
+    <button id="share">Share screen + system audio</button>
     <button id="stop">Stop</button>
   </div>
   <div id="status"></div>
@@ -108,7 +114,7 @@ async function startCapture(getStream, what) {
     const s = await getStream();
     if (!s.getAudioTracks().length) {
       s.getTracks().forEach(t => t.stop());
-      throw new Error('no audio track was shared. Tick "Share audio" in the picker.');
+      throw new Error('no audio was shared. In the picker choose "Entire screen" and switch on "Also share system audio".');
     }
     stopCapture();
     detachA();
@@ -154,7 +160,7 @@ $('mode').onchange = () => {
   const b = $('mode').value === 'B';
   $('modeA').classList.toggle('hidden', b);
   $('modeB').classList.toggle('hidden', !b);
-  if (b) { detachA(); status('Pick a loopback/monitor input, or share a tab/screen with audio.'); }
+  if (b) { detachA(); status('Click "Share screen + system audio", choose "Entire screen" and switch on "Also share system audio". Or capture a loopback input (Stereo Mix, VB-Cable, "Monitor of …").'); }
   else { stopCapture(); status('Pick an audio file.'); }
 };
 
@@ -190,8 +196,14 @@ $('capture').onclick = () => {
 $('share').onclick = () => {
   if (!md?.getDisplayMedia) return status('This browser cannot capture tab/system audio.');
   // video is required by Chrome's picker; we only read the audio track
-  startCapture(() => md.getDisplayMedia({ video: true, systemAudio: 'include',
+  startCapture(() => md.getDisplayMedia({ video: { displaySurface: 'monitor' }, systemAudio: 'include', // 'monitor' opens the Entire screen tab, the only one with system audio
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }), 'shared tab/screen audio');
+};
+$('min').onclick = () => {
+  const min = $('panel').classList.toggle('min');
+  Object.assign($('min'), { textContent: min ? '☰' : '–', title: min ? 'Show panel' : 'Minimize panel (H hides it completely)' });
+  $('min').setAttribute('aria-label', min ? 'Show panel' : 'Minimize panel');
+  $('min').setAttribute('aria-expanded', !min);
 };
 $('stop').onclick = () => { stopCapture(); status('Stopped.'); };
 
