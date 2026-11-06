@@ -43,6 +43,7 @@
       <option value="ambience">Ambience</option>
       <option value="tolerance">Tolerance</option>
       <option value="alchemy">Alchemy</option>
+      <option value="battery">Battery</option>
     </select></label>
     <label id="presetWrap" class="hidden">Preset <select id="preset"></select></label>
   </div>
@@ -208,15 +209,23 @@ $('min').onclick = () => {
 $('stop').onclick = () => { stopCapture(); status('Stopped.'); };
 
 const TOL_PRESETS = ['Blur', 'SwitchBlur', 'Shift', 'Linear Shift', 'Stretch Shift', 'SuperStar', 'WonderWave', "Shift O' Scope", 'Funktional', 'Bass Bounce'];
-$('preset').replaceChildren(...TOL_PRESETS.map((n, i) => new Option(n, i)));
-$('preset').onchange = clearFeedback;
+$('preset').onchange = () => {
+  if ($('effect').value === 'battery') BAT.sim?.load(BAT_PRESETS[$('preset').value - 1] ?? null);
+  else clearFeedback();
+};
 
-const effects = ['bars', 'scope', 'ambience', 'tolerance', 'alchemy'];
+const effects = ['bars', 'scope', 'ambience', 'tolerance', 'alchemy', 'battery'];
 $('effect').onchange = () => {
   const fx = $('effect').value, webgl = fx === 'ambience' || fx === 'tolerance';
   $('cgl').classList.toggle('hidden', !webgl);
   $('c2d').classList.toggle('hidden', webgl);
-  $('presetWrap').classList.toggle('hidden', fx !== 'tolerance');
+  $('presetWrap').classList.toggle('hidden', fx !== 'tolerance' && fx !== 'battery');
+  const names = fx === 'battery' ? ['Randomisation', ...BAT_PRESETS.map(p => p[0])] : TOL_PRESETS;
+  if ($('preset').dataset.fx !== fx) {
+    $('preset').replaceChildren(...names.map((n, i) => new Option(n, i)));
+    $('preset').dataset.fx = fx;
+    if (fx === 'battery') BAT.sim?.load(null);
+  }
   clearFeedback(); // the WebGL effects store different data in the shared buffers
   g.fillStyle = '#000'; // scope only fades the canvas, so wipe what the previous effect drew
   g.fillRect(0, 0, W, H);
@@ -667,7 +676,7 @@ function makeAlchemy(W = 384, H = 288) {
   return { W, H, tick, rect, paste, opt, get img() { return img; }, next: changeWarp, audio: A };
 }
 
-const ALC = { fps: 16, acc: 0, sim: null, canvas: document.createElement('canvas'), data: null, sized: 0 };
+const ALC = { fps: 14, acc: 0, sim: null, canvas: document.createElement('canvas'), data: null, sized: 0 };
 function drawAlchemy(dt) {
   // the original renders at window size (its 384×288 mode looks 5× coarser than the recordings); every size and speed in
   // it is in pixels, so a smaller buffer makes balls look bigger and jumpier
@@ -682,7 +691,7 @@ function drawAlchemy(dt) {
     ALC.data = new ImageData(w, h);
     ALC.sized = 0; ALC.acc = 1;
   }
-  ALC.acc = Math.min(ALC.acc + dt * ALC.fps, 2);                 // fixed 16 ticks/s; every count in the original is in ticks
+  ALC.acc = Math.min(ALC.acc + dt * ALC.fps, 2);                 // fixed 14 ticks/s as measured; every count in the original is in ticks
   if (ALC.acc >= 1) {
     for (; ALC.acc >= 1; ALC.acc--) ALC.sim.tick(freq, wave);
     new Uint32Array(ALC.data.data.buffer).set(ALC.sim.img);
@@ -691,6 +700,436 @@ function drawAlchemy(dt) {
   const [sx, sy, sw, sh] = ALC.sim.rect();                      // drawn every frame: a resize clears the visible canvas
   g.imageSmoothingEnabled = true;
   g.drawImage(ALC.canvas, sx, sy, sw, sh, 0, 0, W, H);
+}
+
+const BAT_PRESETS = [ // [name, movement, pre effects, post effects, locked palette (RGB×256, base64) or 0]
+  ["brightsphere", ["RingSpinShift",-0.0375484,0.762914], [["DotPlane",37,0,0,384]], [], 0],
+  ["cominatcha", ["StretchShift",0.043524,0.154408], [["JiggyScribble",80,227,456,11]], [], "HwQbHwQbIAUcIQYdIgceIggfIwkfJAogJQshJQwiJg0jJw4jKA8kKRAlKREmKhInKxMnLBQoLBUpLRYqLhYrLxcrLxgsMBktMRouMhsvMxwvMx0wNB4xNR8yNiAzNiEzNyI0OCM1OSQ2OSU3OiY3Oyc4PCg5PSk6PSk7Pio7Pys8QCw9QC0+QS4/Qi8/QzBAQzFBRDJCRTNDRjRDRzVERzZFSDdGSThHSjlHSjpISztJTDxKTTxLTT1LTj5MTz9NUEBOUUFPUUJPUkNQU0RRVEVSVEZTVUdTVkhUV0lVV0pWWEtXWUxXWk1YW05ZW05aXE9bXVBbXlFcXlJdX1NeYFRfYVVfYVZgYldhY1hiZFljZVpjZVtkZlxlZ11maF5naF9naWBoamFpa2Fqa2JrbGNrbWRsbmVtb2Zub2dvcGhvcWlwcmpxcmtyc2xzdG1zdW50dW91dnB2d3F3eHJ3eXN4eXR5enR6e3V7fHZ7fHd8fXh9fnl+f3p/f3t/gHyAgX2Bgn6Cg3+Dg4CDhIGEhYKFhoOGhoSHh4WHiIaIiYaJiYeKioiLi4mLjIqMjYuNjYyOjo2Pj46PkI+QkJCRkZGSkpKTk5OTk5SUlJWVlZaWlpeXl5iXl5mYmJmZmZqampubmpybm52cnJ6dnZ+enaCfnqGfn6KgoKOhoaSioaWjoqajo6ekpKilpKmmpaqnpqunp6yop6ypqK2qqa6rqq+rq7Csq7GtrLKurbOvrrSvrrWwr7axsLeysbizsbmzsrq0s7u1tLy2tb23tb63tr64t7+5uMC6uMG7ucK7usO8u8S9u8W+vMa/vce/vsjAv8nBv8rCwMvDwczDws3Ews7Fw8/GxNDHxdHHxdHIxtLJx9PKyNTLydXLydbMytfNy9jOzNnPzNrPzdvQztzRz93Sz97T0N/T0eDU0uHV0+LW0+PX1OTX1eTY1uXZ1uba1+fb2Ojb2enc2erd2uve2+zf3O3f3e7g3e/h3vDi3/Hj4PLj4PPk4fTl4vXm4/bn"],
+  ["dandelionaid", ["StarburstShift",-0.0373287,0.229521,26], [["JiggyScribble",30,75,479,16]], [["JDar",82,3,1,16,0.702707,0,100]], "CxUMCxUMDBUNDRUODhQODxQPEBQQEBQQERMREhMSExMSFBMTFRIUFhIUFhIVFxIWGBEWGREXGhEYGxEYGxAZHBAaHRAaHg8bHw8cIA8cIQ8dIQ4eIg4eIw4fJA4gJQ0gJg0hJg0iJw0jKAwjKQwkKgwlKwwlLAsmLAsnLQsnLgsoLwopMAopMQoqMQkrMgkrMwksNAktNQgtNgguNwgvNwgvOAcwOQcxOgcxOwcyPAYzPAYzPQY0PgY1PwU1QAU2QgQ4QgY5Qgg6QQs7QQ08QBA+QBI/QBVAPxdBPxlDPhxEPh5FPiFGPSNIPSZJPChKPCpLOy1MOy9OOzJPOjRQOjdROTlTOTtUOT5VOEBWOENYN0VZN0haNkpbNkxcNk9eNVFfNVRgNFZhNFljNFtkM11lM2BmMmJoMmVpMWdqMWprMWxsMG5uMHFvL3NwL3ZxL3hzLnt0Ln11LX92LYJ4LIR5LId6LIl7K4x8K45+KpB/KpOAKpWBKZiDKZqEKJ2FJ6KIKKKIKaKIKqOIK6OILKOILaSILqSIL6WJMKWJMaWJMqaJM6aJNKeJNaeJNqeKN6iKOKiKOaiKOqmKO6mKPKqKPaqLPqqLP6uLQKuLQayLQqyLQ6yLRK2MRa2MRq2MR66MSa6MSq+MS6+MTK+MTbCNTrCNT7GNULGNUbGNUrKNU7KNVLKOVbOOVrOOV7SOWLSOWbSOWrWOW7WPXLaPXbaPXraPX7ePYLePYbePYriQY7iQZLmQZbmQZrmQZ7qQaruRbLuSbryUcL2Vcr6XdL+ZdsCaeMGce8KdfcOff8ShgcWig8akhcalh8enicipjMmqjsqskMutksyvlM2xls6ymM+0mtC2ndG3n9K5odK6o9O8pdS+p9W/qdbBq9fCrtjEsNnGstrHtNvJttzKuN3Mut7OvN7Pv9/RweDSw+HUxeLWx+PXyeTZy+Xbzebc0Ofe0ujf1Onh1urj2Ork2uvm3Ozn3u3p4e7r4+/s5fDu5/Hv6fLx6/Pz7fT07/X2"],
+  ["drinkdeep", ["Shiitake",7.52318,0.00704215,0.0218925,2], [["SpectrumEdge",7,16,7]], [["JiggyScribble",39,134,428,11]], "CQAJCQEMCQMQCQQUCQYXCQcbCQkfCQoiCQwmCQ0qCA8uCBAxCBI1CBM5CBU8CBZACBhECBlICBtLBxxPBx5TBx9WByFaByJeByRhByVlBydpByhtBipwBit0Bi14Bi57BjB/BjGDBjOHBjSKBjaOBjeSBTmVBTqZBTydBT2hBT+kBUCoBUKsBUOvBUWzBEa3BEi6BEm+BEvCBEzGBE7JBE/NBFHRBFLUA1TYA1XcA1fgA1jjA1rnA1vrA13uA17yAmL6BGP6B2X5CWf4DGn3D2v2EW31FG/1F3H0GXPzHHXyH3fxIXnwJHvvJ33vKX/uLIHtL4LsMYTrNIbqN4jqOYrpPIzoP47nQZDmRJLlR5TkSZbkTJjjT5riUZzhVJ7gV6DfWaHfXKPeX6XdYafcZKnbZ6vaaa3ZbK/Zb7HYcbPXdLXWd7fVebnUfLvUf73Tgb/ShMDRh8LQicTPjMbOj8jOkcrNlMzMl87LmdDKnNLJn9TJodbIpNjHp9rGqdzFr+DDr+DDsODEseDEsuDFs+DGtODGtOHHteHHtuHIt+HJuOHJueHKuuLLuuLLu+LMvOLMveLNvuLOv+LOv+PPwOPPwePQwuPRw+PRxOPSxeTTxeTTxuTUx+TUyOTVyeTWyuTWyuXXy+XXzOXYzeXZzuXZz+Xa0Obb0Obb0ebc0ubc0+bd1Obe1ebe1eff1uff1+fg2Ofh2efh2ufi2+jj2+jj3Ojk3ejk3ujl3+jm4Ojm4Onn4enn4uno4+np5Onp5urr5urr5urr5urr5uvr5uvr5uvr5uvq5+zq5+zq5+zq5+zq5+3q5+3p5+3p6O3p6O7p6O7p6O7p6O7p6O/o6O/o6e/o6e/o6fDo6fDo6fDn6fDn6fHn6vHn6vHn6vHn6vLm6vLm6vLm6vLm6/Pm6/Pm6/Pm6/Pl6/Tl6/Tl6/Tl7PTl7PXl7PXk7PXk7PXk7Pbk7Pbk7fbk7fbk7ffj7ffj7ffj7ffj7fjj7vjj7vji7vji7vni7vni7vni7vni"],
+  ["eletriarnation", ["StarburstShift",-0.0270867,0.0415937,22,1], [["JiggyScribble",101,222,666,19]], [["JDar",9,0,0,8,1.10129,1,100]], "FB8BFB8BFSACFiEDFyIEGCMFGCMGGSQHGiUIGyYJHCcJHCgKHSgLHikMHyoNICsOISwPISwQIi0RIy4SJC8SJTATJTEUJjEVJzIWKDMXKTQYKjUZKjUaKzYbLDcbLTgcLjkdLjoeLzofMDsgMTwhMj0iMz4jMz4kND8kNUAlNkEmN0InN0MoOEMpOUQqOkUrO0YsPEctPEgtPUguPkkvP0owQEsxQEwyQUwzQk00Q041RE82RFA2RVE3RlE4R1I5SFM6SVQ7SVU8SlU9S1Y+TFc+TVg/TVlATlpBT1pCUFtDUVxEUl1FUl5GU15HVF9HVWBIVmFJVmJKV2NLWGNMWWRNWmVOW2ZPW2dQXGhQXWhRXmlSX2pTX2tUYGxVYWxWYm1XY25YZG9ZZHBZZXFaZnFbZ3JcaHNdaHReaXVfanVga3ZhbHdibHhibXljbnpkb3plcHtmcXxncX1ocn5pc35qdH9rdYBrdYFsdoJtd4NueINveYRweoVxeoZye4dzfIh0fYh0fol1fop2f4t3gIx4gYx5go16g457g498hJB8hZF9hpF+h5J/h5OAiJSBiZWCipWDi5aEjJeFjJiFjZmGjpqHj5qIkJuJkJyKkZ2Lkp6Mk56NlJ+OlKCOlaGPlqKQl6ORmKOSmaSTmaWUmqaVm6eWnKeXnaiXnamYnqqZn6uaoKyboaycoq2doq6eo6+fpLCgpbGgprGhprKip7OjqLSkqbWlqrWmq7anq7eorLiprbmprrqqr7qrr7ussLytsb2usr6vs76wtL+xtMCxtcGytsKzt8O0uMO1uMS2ucW3usa4u8e5vMe6vMi6vcm7vsq8v8u9wMy+wcy/wc3Aws7Bw8/CxNDDxdHDxdHExtLFx9PGyNTHydXIytXJytbKy9fLzNjMzdnMztrNztrOz9vP0NzQ0d3R0t7S097T09/U1ODV1eHV1uLW1+PX1+PY2OTZ2eXa2ubb2+fc3Ofd3Oje3ene3urf3+vg4Ozh4Ozi4e3j4u7k4+/l5PDm"],
+  ["cottonstar", ["StarburstShift",0.0282922,0.1403,32], [["EdgeGradiant"],["DotPlane",31,3,0,384]], [], 0],
+  ["gemstonematrix", ["TileShift",0.100998], [["JDar",68,3,0,32,0.727061,0,100]], [], "EQYAEQkBEQ0CEhADEhQEExcFExsGFB4HFCIIFCUJFSkKFSwLFjAMFjMNFzcOFzoPFz4QGEERGEUSGUgTGUwUGk8VGlMXGlcYG1oZG14aHGEbHGUcHWgdHWweHW8fHnMgHnYhH3oiH30jIIEkIIQlIIgmIYsnIY8oIpIpIpYqI5krI50sI6EuJKQvJKgwJasxJa8yJrIzJrY0Jrk1J702J8A3KMQ4KMc5Kcs6Kc47KdI8KtU9Ktk+K9w/K+BALONBLetELetELetELetELetELetFLetFLetFLutFLutGLutGLutGLutGLuxHLuxHL+xHL+xHL+xIL+xIL+xIL+xIL+xJMOxJMOxJMOxJMOxKMO1KMO1KMO1KMe1LMe1LMe1LMe1LMe1MMe1MMe1MMe1MMu1NMu1NMu5NMu5NMu5OMu5OMu5OM+5OM+5PM+5PM+5PM+5PM+5QM+5QNO5QNO9QNO9RNO9RNO9RNO9RNO9SNe9SNe9SNe9SNe9TNe9TNe9TNvBUNvBWNvBYNfBaNfBdNPBfNPBhNPBjM/BmM/BoMu9qMu9tMu9vMe9xMe9zMO92MO94L+96L+98L+5/Lu6BLu6DLe6GLe6ILe6KLO6MLO6PK+6RK+2TKu2WKu2YKu2aKe2cKe2fKO2hKO2jKO2lJ+2oJ+yqJuysJuyvJeyxJeyzJey1JOy4JOy6I+y8I+u/I+vBIuvDIuvFIevIIevKIOvMIOvOIOvRH+rTH+rVHurYHuraHurcHereHerhHOrjG+noHunoIenoJenoKOnpK+npL+npMunpNunqOenqPOrqQOrqQ+rrRurrSurrTerrUersVOrsV+rsW+vsXuvtYevtZevtaOvtbOvub+vucuvuduvueezvfOzvgOzvg+zvh+zwiuzwjezwkezwlOzxl+3xm+3xnu3xou3ype3yqO3yrO3yr+3zsu3ztu7zue7zve70wO70w+70x+70yu71ze710e711O/12O/22+/23u/24u/25e/36O/37O/37+/3"],
+  ["sepiaswirl", ["Shiitake",3.65889,0.00247362,0.0172597,1], [["EdgeGradiant"]], [["CircleWaveform",1,1,0.590983]], "4+v74+v64+r44+n34+j14uf04uby4uXw4uTv4uPt4eLs4eHq4eDo4d/n4N7l4N3k4Nzi4Nvg4Nrf39nd39jc39fa39bZ39XX3tTV3tPU3tLS3tHR3dDP3c/N3c7M3c3K3czJ3MvH3MrF3MnE3MjC28fB28a/28W+28S828O62sK52sG32sC22r+02r6y2b2x2byv2buu2bqs2Lmq2Lip2Len2Lam2LWk17Sj17Oh17Kf17Ge1rCc1q+b1q6Z1q2X1qyW1ayU1auT1aqR1amP1aiO1KeM1KaL1KWJ1KSH06OG06KE06GD06CB05+A0p5+0p180px70pt50Zp40Zl20Zh00Zdz0ZZx0JVw0JRu0JNs0JJr0JFpz5Boz49mz45lz41jzoxhzotgzopezoldzohbzYdZzYZYzYVWzYRVzINTzIJRzIFQzIBOzH9Ny35Ly31Ky3xIy3tGy3pFynlDynhCyndAynY+yXU9yXQ7yXM6yXI4yXE2yHA1yG8zyG4yx2wuxmwuxWsuw2ouwmkuwWkuv2guvmcuvWYtu2UtumUtuWQtt2MttmIttWIts2EssmAssV8sr14srl4srV0sq1wsqlsrqVsrp1orplkrpVgro1crolcroVYqn1UqnlQqnVMqm1MqmlIqmVEql1ApllAplU8pk04pkk0pkUwpj0wpjksojUooi0koikkoiUgoh0cohkYohUUng0UngkQngUMnf0InfkInfUEne0Amej8meT4mdz4mdj0mdTwmczsmcjolcTolbzklbjglbTclazclajYlaTUlZzQkZjMkZTMkYzIkYjEkYTAkXzAkXi8jXS4jWy0jWiwjWSwjVysjViojVSkiUykiUigiUSciTyYiTiUiTSUiSyQhSiMhSSIhRyEhRiEhRSAhQx8hQh4gQR4gPx0gPhwgPRsgOxogOhogORkfNxgfNhcfNRcfMxYfMhUfMRQfLxMeLhMeLRIeKxEeKhAeKRAeJw8eJg4dJQ0dIwwdIgwdIQsdHwodHgkd"],
+  ["event horizon", ["Shiitake",7.69204,0.130503,0.000558489,1], [["SpectrumEdge",159,59]], [["DotPlane",24,2,0,384]], 0],
+  ["illuminator", ["RingSpinShift",0.028103,0.386169], [["EdgeTrace",41]], [["CircleWaveform",2,2,0.292256]], 0],
+  ["i see the truth", ["Shiitake",0.943724,0.0601674,0.00662862,3], [["JiggyScribble",70,200,1205,18]], [], "FhEDFhQDFhgDFhsDFh8DFiMDFiYDFioDFi0DFjEDFjUDFjgDFjwDFkADFkMDFkcDFkoDFk4EFlIEFlUEFlkEFlwEFmAEFmQEFmcEFmsEFm8EFnIEFnYEFnkEFn0EFoEEFoQEFogFFosFFo8FFpMFFpYFFpoFFp4FFqEFFqUFFqgFFqwFFrAFFrMFFrcFFroFFr4FFsIGFsUGFskGFs0GFtAGFtQGFtcGFtsGFt8GFuIGFuYGFukGFu0GFvEGFvQGFfwHFfoJFvcLF/QOGPEQGe4SGewVGukXG+YaHOMcHeAeHt0hHtsjH9gmINUoIdIqIs8tI8wvI8oxJMc0JcQ2JsE5J747KLs9KLlAKbZCKrNFK7BHLK1JLapMLahOLqVQL6JTMJ9VMZxYMplaMpdcM5RfNJFhNY5kNotmN4hoN4ZrOINtOYBvOn1yO3p0PHd3PHV5PXJ7Pm9+P2yAQGmDQWaFQWSHQmGKQ16MRFuORViRRlWTRlOWR1CYSE2aSUqdS0SiTEahTkigUEqfUkydVE6cVVCbV1KZWVWYW1eXXVmVX1uUYF2TYl+RZGGQZmSPaGaNamiMa2qLbWyJb26IcXCHc3OFdXWEdneDeHmBenuAfH1/fn99gIJ8gYR7g4Z5hYh4h4p3iYx2i450jJBzjpNykJVwkpdvlJlulptsl51rmZ9qm6JonaRnn6ZmoahkoqpjpKxipq5gqLFfqrNerLVcrbdbr7lasbtYs71XtcBWt8JUuMRTusZSvMhQvspPws9Mws9Ow89RxNBTxNBWxdBYxtFbx9Fdx9JgyNJjydJlydNoytNqy9NtzNRvzNRyzdV1ztV3ztV6z9Z80NZ/0daB0deE0teG09iJ09iM1NiO1dmR1tmT1tmW19qY2Nqb2due2dug2tuj29yl29yo3Nyq3d2t3t2v3t6y39614N634N+64d+84t+/4+DB4+DE5OHH5eHJ5eHM5uLO5+LR6OLT6OPW6ePY6uTb6uTe6+Tg7OXj7eXl7eXo7ubq7+bt"],
+  ["kaleidovision", ["RingSpinShift",-0.0497925,0.209821], [["DotPlane",33,5,0,384]], [["CircleWaveform",1,2,0.453449]], 0],
+  ["green is not your enemy", ["Shiitake",5.93463,0.106946,0.0258461,2], [["WaveEdge",1]], [["JiggyScribble",37,166,736,19]], "FhEDFhQDFhgDFhsDFh8DFiMDFiYDFioDFi0DFjEDFjUDFjgDFjwDFkADFkMDFkcDFkoDFk4EFlIEFlUEFlkEFlwEFmAEFmQEFmcEFmsEFm8EFnIEFnYEFnkEFn0EFoEEFoQEFogFFosFFo8FFpMFFpYFFpoFFp4FFqEFFqUFFqgFFqwFFrAFFrMFFrcFFroFFr4FFsIGFsUGFskGFs0GFtAGFtQGFtcGFtsGFt8GFuIGFuYGFukGFu0GFvEGFvQGFfwHFfoJFvcLF/QOGPEQGe4SGewVGukXG+YaHOMcHeAeHt0hHtsjH9gmINUoIdIqIs8tI8wvI8oxJMc0JcQ2JsE5J747KLs9KLlAKbZCKrNFK7BHLK1JLapMLahOLqVQL6JTMJ9VMZxYMplaMpdcM5RfNJFhNY5kNotmN4hoN4ZrOINtOYBvOn1yO3p0PHd3PHV5PXJ7Pm9+P2yAQGmDQWaFQWSHQmGKQ16MRFuORViRRlWTRlOWR1CYSE2aSUqdS0SiTEahTkigUEqfUkydVE6cVVCbV1KZWVWYW1eXXVmVX1uUYF2TYl+RZGGQZmSPaGaNamiMa2qLbWyJb26IcXCHc3OFdXWEdneDeHmBenuAfH1/fn99gIJ8gYR7g4Z5hYh4h4p3iYx2i450jJBzjpNykJVwkpdvlJlulptsl51rmZ9qm6JonaRnn6ZmoahkoqpjpKxipq5gqLFfqrNerLVcrbdbr7lasbtYs71XtcBWt8JUuMRTusZSvMhQvspPws9Mws9Ow89RxNBTxNBWxdBYxtFbx9Fdx9JgyNJjydJlydNoytNqy9NtzNRvzNRyzdV1ztV3ztV6z9Z80NZ/0daB0deE0teG09iJ09iM1NiO1dmR1tmT1tmW19qY2Nqb2due2dug2tuj29yl29yo3Nyq3d2t3t2v3t6y39614N634N+64d+84t+/4+DB4+DE5OHH5eHJ5eHM5uLO5+LR6OLT6OPW6ePY6uTb6uTe6+Tg7OXj7eXl7eXo7ubq7+bt"],
+  ["lotus", ["StarburstShift",0.0104511,0.0136876,30], [["EdgeTrace",55]], [["DotPlane",30,6,0,384]], "BAMQBQMRBgMSBwMTCQQUCgQVCwQWDQUXDgUYDwUZEQYaEgYbEwYcFAcdFgceFwcfGAggGgghGwgiHAkjHgkkHwklIAomIQonIwooJAspJQsrJwssJwwtKAwuKQwvKg0wKw0xLA0yLg4zLw40MA41Mg82Mw83NA84NhA5NxA6OBA7OhE8OxE9PBE+PRE/PxJAQBJBQRJCQxNDRBNERRNGRxRHSBRISRRJShVKTBVLTRVMThZNUBZOURZPUhdQVBdRVRdSVhhTVxhUWRhVWhlWWxlXXRlYXhpZXxpaYRpbYhtcYxtdZBteZhxfZxxhaBxiah1jax1kbB1lbh5mbx5ncB5och9pcx9qdB9rdR9sdyBteCBueSBveyFwfCFxfSFyfyJzgCJ0gSJ1giN2hCN3hSN4hiR5iCR6iSR8iiV9jCV+jSV/jiaAjyaBkSaCkieDkyeElSeFliiGlyiHmSiImimJmymKnCmLniqMnyqNoCqOoiuPoyuQpCuRpiySpyyTqi2Wqi6Wqi+XqzGYqzKYrDSZrDWarTaarTibrjmcrjucrzydrz2erz+esECfsEKgsUOgsUShskaiskeis0mjs0qktEuktE2ltU6mtVCmtVGntlKotlSot1Wpt1equFiquFqruVusuVysul6tul+uu2Guu2Kvu2OwvGWwvGaxvWiyvWmyvmqzvmy0v220v2+1wHC2wHG2wXO3wXS4wXa4wne5wni6w3q6w3u7xH28xH68xX+9xYG+xoK+xoS/x4XAx4fBx4jByInCyIvDyYzEyY7Fyo/GypDHy5LIy5PJzJXJzJbKzZfLzZnLzZrMzpzNzp3Nz57Oz6DP0KHP0KPQ0aTR0aXR0qfS0qjT06rT06vU06zV1K7V1K/W1bHX1bLX1rTY1rXZ17bZ17ja2Lnb2Lvb2bzc2b3d2b/d2sDe2sLf28Pf28Tg3Mbh3Mfh3cni3crj3svj3s3k387l39Dl39Hm4NLn4NTn4dXo4dfp4tjp4tnq49vr49zr5N7s5N/t"],
+  ["relatively calm", ["Twirlocity",11,0.022779,8], [["SpectrumEdge",4,14,6],["JDar",92,1,0,4,1.07506]], [["DotPlane",45,0,0,384]], "Bw4RBw8SCBATCBEVCRMWChQYCxYaDBgbDBgdDBofDRsgDhwiDx0kEB4lECAnESApEiIrEiMsEyQvFCUwFSYyFSg0Fik1Fyo3Fys5GC06GS48GS8+GjA/GzFBHDJDHTREHTVGHjZIHzdJIDhMIDlOITpQITxSIj1UIz5VJD9XJEFZJUJaJkNcJkReJ0VfKEdhKUdjKUlkKkpmKktoK0xqLE1sLU9tLVBvLlFxL1JyMFN0MVR2MVV4Mld5M1l7M1l9NFt+NVyANl2CN16DOF+FOWGHOWKJOmOLO2SMO2WOPGaQPWeRPmmTP2qVP2uWP2yYQG6aQW+cQnCdQ3GfQ3KhRHSkRXWlRnalRnamR3emSHemSHinSXmnSXmoSnqpSnupS3upTHyqTHyqTX2qTn2rTn6rT3+sT4CtT4CtUIGtUYGuUYKvUoOuU4OuU4SvVISvVYWwVYawVoewV4exV4iyWIiyWImyWYmzWYqzWoq0Wou0W4u1XIy1XI22XY22XY62X5C5X5C5X5G4X5K4YJK5YJO4YJS4YJW4YZW4YJa4YZe4YZi4YZi4YZm4Ypq4Ypu4Ypu4Ypy4Y524Y564Y564Y5+4ZKC4ZKG4ZKK4ZKK4ZKO4ZKS4ZKW3ZKW3Zaa3Zae3Zai3Zqi3Zqm3Zqq3Zqu3Z6u3Z6y3Z623Z663aK63Z7C3abC3arG4bLK4bbO5b7S6cbS6crW7dLa8dbe8d7i9eLm+erq+e7q/fbvAf7zBgL3Bgr7Cg77Chb/DhsDEiMDEisHFi8LGjcPGjsTHkMTIkcXIk8bJlMfJlsjKmMjLmsnLm8rMncvNnszNoM3Ooc7Po87QpM/QptDRp9HSqdLSq9PTrNPUrtTVr9XVsdbWs9fWtNfXttjYt9nYudrZutvavNvavtzbv9zcwd3dwt7dxN/exeDfx+HfyOLgy+PgzOPhzuTiz+Xi0ebj0ufk1Ofk1ejl1+nm2Orm2uvn2+vn3ezo3u3p4O7p4e/p5O/q5fDr5/Hs6PLt6vTu6/Tu7fXv"],
+  ["sleepyspray", ["LinearShift",-1,-3], [], [["DotPlane",45,0,0,384]], 0],
+  ["smoke or water?", ["SwirlShift",-0.0440031,5,-5], [["JDar",88,3,1,32,0.727061,0,100]], [], "DQAeDQAeDgEfDwIgEAMhEQQhEgUiEwYjEwckFAgkFQklFgomFwsnGAwnGQ0oGg0pGg4qGw8qHBArHREsHhItHxMtIBQuIBUvIRYwIhcxIxgxJBkyJRozJho0Jxs0Jxw1KB02KR43Kh83KyA4LCE5LSI6LSM6LiQ7LyU8MCY9MSc9Mic+Myg/NClANCpBNStBNixCNy1DOC5EOS9EOjBFOjFGOzJHPDNHPTRIPjRJPzVKQDZKQTdLQThMQjlNQzpNRDtORTxPRj1QRz5RRz9RSEBSSUFTSkJUS0JUTENVTURWTkVXTkZXT0dYUEhZUUlaUkpaU0tbVExcVE1dVU5dVk9eV09fWFBgWVFhWlJhW1NiW1RjXFVkXVZkXldlX1hmYFlnYVpnYVtoYlxpY1xqZF1qZV5rZl9sZ2BtaGFtaGJuaWNvamRwa2VxbGZxbWdybmhzbml0b2l0cGp1cWt2cmx3c213dG54dW95dXB6dnF6d3J7eHN8eXR9enV9e3Z+fHd/fHeAfXiBfnmBf3qCgHuDgXyEgn2Egn6Fg3+GhICHhYGHhoKIh4OJiISKiYSKiYWLioaMi4eNjIiNjYmOjoqPj4uQj4yRkI2RkY6Sko+Tk5CUlJGUlZGVlpKWlpOXl5SXmJWYmZaZmpeam5ianJmbnJqcnZudnpydn52eoJ6foZ6gop+ho6Cho6GipKKjpaOkpqSkp6WlqKamqaenqainqqmoq6qprKuqrauqrqyrr62ssK6tsK+tsbCusrGvs7KwtLOxtbSxtrWytrazt7e0uLi0ubm1urm2u7q3vLu3vby4vb25vr66v7+6wMC7wcG8wsK9w8O9w8S+xMW/xcbAxsbBx8fByMjCycnDysrEysvEy8zFzM3Gzc7Hzs/Hz9DI0NHJ0NLK0dPK0tPL09TM1NXN1dbN1tfO19jP19nQ2NrR2dvR2tzS293T3N7U3d/U3eDV3uDW3+HX4OLX4ePY4uTZ4+Xa5Oba5Ofb5ejc5und5+rd6Ove6ezf6u3g"],
+  ["back to the groove", ["SwirlShift",-0.0480377,3,-4], [], [["JDar",75,3,0,9,1.40663,0,100],["DotPlane",38,0,0,384]], 0],
+  ["spider's last moment...", ["Shiitake",5.93463,0.106946,0.0258461,2], [], [["JDar",88,3,0,32,0.727061,1,100]], "FhEDFhQDFhgDFhsDFh8DFiMDFiYDFioDFi0DFjEDFjUDFjgDFjwDFkADFkMDFkcDFkoDFk4EFlIEFlUEFlkEFlwEFmAEFmQEFmcEFmsEFm8EFnIEFnYEFnkEFn0EFoEEFoQEFogFFosFFo8FFpMFFpYFFpoFFp4FFqEFFqUFFqgFFqwFFrAFFrMFFrcFFroFFr4FFsIGFsUGFskGFs0GFtAGFtQGFtcGFtsGFt8GFuIGFuYGFukGFu0GFvEGFvQGFfwHFfoJFvcLF/QOGPEQGe4SGewVGukXG+YaHOMcHeAeHt0hHtsjH9gmINUoIdIqIs8tI8wvI8oxJMc0JcQ2JsE5J747KLs9KLlAKbZCKrNFK7BHLK1JLapMLahOLqVQL6JTMJ9VMZxYMplaMpdcM5RfNJFhNY5kNotmN4hoN4ZrOINtOYBvOn1yO3p0PHd3PHV5PXJ7Pm9+P2yAQGmDQWaFQWSHQmGKQ16MRFuORViRRlWTRlOWR1CYSE2aSUqdS0SiTEahTkigUEqfUkydVE6cVVCbV1KZWVWYW1eXXVmVX1uUYF2TYl+RZGGQZmSPaGaNamiMa2qLbWyJb26IcXCHc3OFdXWEdneDeHmBenuAfH1/fn99gIJ8gYR7g4Z5hYh4h4p3iYx2i450jJBzjpNykJVwkpdvlJlulptsl51rmZ9qm6JonaRnn6ZmoahkoqpjpKxipq5gqLFfqrNerLVcrbdbr7lasbtYs71XtcBWt8JUuMRTusZSvMhQvspPws9Mws9Ow89RxNBTxNBWxdBYxtFbx9Fdx9JgyNJjydJlydNoytNqy9NtzNRvzNRyzdV1ztV3ztV6z9Z80NZ/0daB0deE0teG09iJ09iM1NiO1dmR1tmT1tmW19qY2Nqb2due2dug2tuj29yl29yo3Nyq3d2t3t2v3t6y39614N634N+64d+84t+/4+DB4+DE5OHH5eHJ5eHM5uLO5+LR6OLT6OPW6ePY6uTb6uTe6+Tg7OXj7eXl7eXo7ubq7+bt"],
+  ["strawberryaid", ["StretchShift",-0.0370937,0.142158], [["CosEdgeGradiant",0.0806421]], [["CircleWaveform",1,1,0.584977],["JDar",94,1,0,8,1.1934]], "CRIKChIKDBIKDhIKEBIKEhIKExELFRELFxELGBELGhELHBEMHRAMHxAMIRAMIxAMJRANJxANKA8NKg8NLA8NLg8OMA8OMQ4OMw4NNQ4NNw4OOQ4OOw0OPAwOPgwOQAwPQgwPRAwPRgwPRwsPSQsQSwsQTQsQTwsQUQsQUgoRVAoRVgoRWAoRWgoRWwkSXQkSXwkSYQkSYwkSZQkTZggTaAgTaggTbAgTbggUcAgUcQcUcwcUdQcUdwcVeQcVewcVfAYVfgYVgAYWggYWhAYWhQUWhwUWiQUXiwUXjQUXjwUXkAQXkgQYlAQYlgQYmAQYmgQYmwMZnQMZnwMZnwMZowIaowQcpAcepQkgpgwjpw4lqBEnqRMqqhYsqxkurBsxrR4zriA1ryM4sCU6sSg8sio/sy1BtDBDtTJFtjVItzdKtzpMuDxPuT9RukFTu0RWvEdYvUlavkxdv05fwFFhwVNkwlZmw1hoxFtqxV5txmBvx2NxyGV0yWh2ymp4y217zHB9zHJ/zXWCzneCz3qE0HyH0X+J0oGL04KO1IWQ1YeS1oqU14yX2I+Z2ZGb2pSe25ag3Jmi3Zyl3p6n36Gp4KOs4Kau4aiw4quz46215LC35bO55rW857i+6LrA6b3D6r/F68LH7MTK7cfM7srO78zR8M/T8dHV8tTY89ba9dzf9dzf9dzf9dzf9d3f9d3g9N3g9N7g9N7g9N7h9N/h89/h89/h89/i8+Di8+Di8+Di8uHj8uHj8uHj8uLj8uLk8eLk8eLk8ePk8ePl8ePl8OTl8OTl8OTm8OXm8OXm8OXm7+Xn7+bn7+bn7+bn7+fo7ufo7ufo7ujo7ujp7ujp7enp7enp7enp7enq7erq7erq7Orq7Ovr7Ovr7Ovr7Ozr6+zs6+zs6uzs6u3s6u3t6u3t6e7t6e7t6e7u6e/u6e/u6O/u6O/v6PDv6PDv6PDv5/Hw5/Hw5/Hw5/Lw5/Lx5/Lx5vHx5vLx5vLx5vLx5vPx5fPx5fPy5fTy5fTy5fTy"],
+  ["the world", ["Shiitake",-0.348064,0.130805,0.0215705,1], [["SpectrumEdge",214,106],["CircleWaveform",0,2,0.52228],["DotPlane",46,1,0,384]], [], "HBcSHBcSHRgTHhkUHxoVIBsWIRsXIhwYIh0YIx4ZJB8aJSAbJiAcJyEdKCIeKCMeKSQfKiUgKyUhLCYhLSciLigjLikjLykkMColMSsmMiwnMy0oNC4pNS4pNS8qNjArNzEsODItOTMuOTMvOjQvOjUwOzUxPDYyPTYzPjc0Pzg1QDk1QDo2QTs3Qjs4Qzw5RD06RT47Rj87R0A8R0A9SEE+SUI/SkNAS0RBTERBTUVCTUZDTkdET0hFUElGUUlHUkpIU0tIU0xJVE1KVU5LVk5MV09NWFBOWVFOWlJPWlJQW1NRXFRSXVVTXlZUX1dUYFdVYFhWYVlXYlpYY1lZZFpaZVtaZlxbZl1cZ15daF9eaWBfamFga2JgbGNhbWRibWVjbmVib2ZjcGdkcWhkcmllc2pmc2pndGtodWxpdm1qd25qeG9reW9seXBtenFue3JvfHNwfXNwfnJxf3NygHRzgHV0gXZ1gnZ2g3d2hHh3hXl4hnp5hnt6h3t7iHx8iX19in59in9+in9/ioCAi4GBjIKCjYODjoSDj4SEkIWFkIaGkYeHkoiIk4mJlImJlYqKlouLl4yMl42NmI2OmY6Pmo+Pm5CQnJGRnZKSnZKTnpOUn5SVoJWVoZaWopeXo5eYo5iZpJmapZqbppubp5ucqJydqZ2eqp6fqp+gq6ChrKChraGirqKjrqOkr6Slr6WmsKWnsaansqeos6iptKmqtaqrtaqstqqtt6utuKyuua2vuq2wu66xvK+yvLCzvbG0vrK0v7K1wLO3wbS5wrW5wra5w7e6xLe6xbi7xrm8x7q9yLu+yLu/ybzAyr3Ay77BzL/CzcDDzsDEz8HFz8LG0MPG0cTG0sXH08XI1MbJ1cfK1cjL1snL18nM2MrN2cvO2szP2s3Q287R287R3M/S3dDT3tHU39LV4NPW4dPX4dTX4tXY49bZ5Nfa5dfb5tjc59nd59rd6Nve6dzf6tzg693h7N7i7d/j7eDj7uHk7+Hl8OLm8ePn8uTo8+Xp"],
+  ["dance of the freaky circles", ["TileShift",0.0337657], [["EdgeTrace",55]], [["CircleWaveform",1,2,0.643847]], "BxIZBxIaCBIcCRIeChIfCxIhCxMjDBMkDRMmDhMoDxMpEBMrEBQtERQuEhQwExQyFBQzFRQ1FRU3FhU4FxU6GBU8GRU9GhU/GhZBGxZCHBZEHRZGHhZHHxZJHxdLIBdMIRdOIhdQIxdSJBdTJBhVJRhXJhhYJxhaKBhcKRhdKRlfKhlhKxliLBlkLRlmLhlnLhppLxprMBpsMRpuMhpwMxpxMxtzNBt1NRt2Nht4Nxt6OBt7OBx9ORx/OhyAOxyCPR2GPh2GPx2GQB2HQR2HQx2IRB2IRR2JRh2JSB2JSR2KSh6KSx6LTR6LTh6MTx6MUB6MUR6NUx6NVB6OVR6OVh6PWB+PWR+PWh+QWx+QXR+RXh+RXx+SYB+SYR+SYx+TZB+TZSCUZiCUaCCVaSCVaiCVayCWbSCWbiCXbyCXcCGYcSGYcyKYdCKZdSKZdiKaeCKaeSKbeiKbeyKcfSKdfiKefyKfgCOfgSOggyOghCOghSOhhiOhiCOiiSOiiiOjjSSkjSWljiemjyinjyqokCypkS2rki+skjGtkzKulDSvlTaxlTeyljmzlzu0mDy1mD62mT+2mkG3m0O4m0S5nEa6nUi8nUm9nkq+n0y/oE3AoE/BoVHDolLEo1TFo1bGpFfHpVnJplrKplzLp17MqF/NqWHPqWPQqmTRq2bSrGjTrGnUrWvWrm3Xrm7Yr3DZsHLasXPcsXXdsnbes3jftHrgtHvhtX3jtn/kt4Dlt4LmuITnuYXpuofquonru4rsvY7vvY/vvpHvv5Lvv5TvwJXvwZfvwpjvwprvw5zvxJ3vxZ/vxaDvxqLvx6PvyKXvyKfvyajvyqrvyqvvy63vzK7vzbDvzbHvzrPvz7Xv0Lbv0Ljv0bnv0rvv07zv077v1MDv1cHv1cPv1sTv18bv2Mfv2Mnv2crv2szv287v28/v3NHv3dLv3tTv3tXv39fv4Nnv4Nrv4dzv4t3v49/v4+Dv5OLv5ePv5uXv5ufv5+jv6Orv6evv6e3v6u7v6/Dv"],
+  ["my tornado is resting", ["SwirlShift",0.025161,0,-10], [["CircleWaveform",3,1,0.489064]], [], 0],
+  ["hizodge", ["Shiitake",0.943724,0.0601674,0.00662862,3], [["CosEdgeGradiant",0.00978912]], [["JDar",76,3,0,8,1.40663,0,100]], "5+Pp5uPp5eLo4+Hn4uDm4ODl39/k3d7j3N3i2t3g2dzg19ve1tre1Nrc09nc0dja0NfaztfYzdbXy9XXytTWyNTUx9PTxdLTxNHSwtHQwdDPv8/Pvs7OvM7Mu83LuczLuMvKtsvItcrHs8nGssjFsMjFr8fErcbDrMXCqsXAqcS/p8O+psK9pcK9o8G8osC7oL+6n7+4nb63nL22mry1mby1l7u0lrqzlLmyk7mwkbivkLeujratjbati7WsirSriLOqh7OohbKnhLGmgrClgbCkf6+jfq6ifK2he62heaygeKufdqqedaqdc6mccqibcKeab6eYbaaXbKWWaqSVaaSUZ6OTZqKSZaGRY6GRYqCQYJ+PX56OXZ6NXJ2MWpyLWZuKV5uIVpqHVJmGU5iFUZiEUJeDTpaCTZWBS5WBSpSASJN/R5J+RZJ9RJF8QpB7QY96P494Po53PI12O4x1OYx0OItzNopyNYlxM4lxMohwMIdvL4ZuLYZtLIVsKoRrJ4JoJ4JoJ4FnJ4BnJn9mJn5lJn5lJn1kJXxjJXtjJXpiJHlhJHlhJHhgJHdfI3ZfI3VeI3VdInRdInNcInJcInFbIXBaIXBaIW9ZIG5YIG1YIGxXIGxWH2tWH2pVH2lUHmhUHmdTHmdSHmZSHWVRHWRRHWNQHWNPHGJPHGFOHGBNG19NG15MG15LG11LGlxKGltJGlpJGVlIGVlHGVhHGVdGGFZFGFVFGFVEF1REF1NDF1JCF1FCFlBBFlBAFk9AFU4/FU0+FUw+FUw9FEs8FEo8FEk7FEg6E0c6E0c5E0Y5EkU4EkQ3EkM3EkM2EUI1EUE1EUA0ED8zED4zED4yED0xDzwxDzswDzovDjkvDjkuDjgtDjctDTYsDTUsDTUrDDQqDDMqDDIpDDEoCzAoCzAnCy8mCy4mCi0lCiwkCiwkCSsjCSoiCSkiCSghCCchCCcgCCYfByUfByQeByMdByMdBiIcBiEbBiAbBR8aBR4ZBR4ZBR0YBBwXBBsXBBoW"],
+  ["chemicalnova", ["StarburstShift",-0.0390469,0.169341,2], [["EdgeGradiant"]], [["CircleWaveform",1,1,0.437555],["JDar",84,0.761242,0.616034,14,0,0,100]], "Gh0AGh0FGhwLGxsRGxoWHBocHBkiHRgnHRctHhczHhY4HhU+HxREHxRJIBNPIBJVIRFbIRFgIhBmIg9sIg5xIw53Iw19JAyCJAuIJQuOJQqTJgmZJwelKAuhKQ+dKhOZKxiULByQLSCMLiWHMCmDMS1/MjJ6MzZ2NDpyNT9tNkNpOEdlOUthOlBcO1RYPFhUPV1PPmFLQGVHQWpCQm4+Q3I6RHc1RXsxSIQoTIQoUYQnVoMnW4MmYIMlZYIlaoIkb4IjdIEjeYEifoEhg4AhiIAgjYAfkn8fl38enH8doX4dpn4cq34bsH0btX0aun0Zv3wZxHwYyXwXznsX2HoV2HcZ2XMe2m8j22sn22gs3GQx3WA13lw631g/31VD4FFI4U1N4klR40VW40Jb5D5g5Tpk5jZp5zJu5y9y6Ct36Sd86iOA6x+F6xyK7BiO7RST7wyd6xCe5hWf4hqg3R+i2SSj1Cmk0C6myzOnxziowj2qvkKruUestUyusFGvrFWwp1qxo1+znmS0mmm1lW63kXO4jHi5iH27g4K8f4e9eoy/dpHAbJvDbJvEbJvFa5rGa5rHaprIapnJaZnKaZjLaJjMaJjNZ5fOZ5fPZpfQZpbRZZbSZZXTZJXUZJXVY5TWY5TXYpTYYpPZYZPaYZLbYJLcYJLdX5HeXpDhYZLcZZXXapjSbZvNcp3IdqDDeaO+faa5gam0hquvia6qjrGlkrSglbebmbmVnbyQor+LpcKGqcWBrsd8scp3tc1yutBtvtNowdVjxtheyttZ0uFO0uFP0uFR0uBT0uBV0t9X0t9Z0t5b0t5d0t1f0t1h0t1j0txl0txn0ttp09tr09pt09pv09lx09lz09l109h309h509d709d909Z/09aB09WD1NSH1dSK1tSN19WQ2NWT2daW29aZ3Nec3def3tei39il4dio4tmr49mu5Nqx5dq059u46Nu76du+6tzB69zE7N3H7t3K797N8N7Q8d7T8t/W9N/Z9eDc9uDf9+Hi+OHl"]
+];
+
+// ---------- battery (CPU simulation of the original's behaviour) ----------
+// The state is one 8-bit image of palette indices. Each tick: "pre" effects draw, the image is copied through a
+// per-pixel movement table, "post" effects draw, then a 5-tap blur that also darkens by one index. New movements,
+// effects and palettes are picked on random timers; a new movement morphs in over 18 steps.
+function makeBattery(W = 384, H = 288) {
+  const N = W * H, PI = Math.PI, TAU = 2 * PI, tr = Math.trunc, cx = W >> 1, cy = H >> 1;
+  const rand = () => Math.random() * 32768 | 0;                  // C rand(): 0..32767
+  const rf = () => rand() / 32767;
+  const spin = () => rf() * .1 - .05;
+  let img = new Uint8Array(N).fill(1), other = new Uint8Array(N).fill(1);
+  const A = new Uint8Array(0x1000);                              // spectrum L | spectrum R | wave L | wave R, 1024 each
+  const LUT = Uint8Array.from({ length: 1280 }, (_, s) => Math.max(1, (s / 5 | 0) - 1));
+
+  // ---- drawing primitives ----
+  const put = (x, y, v) => { if (x >= 0 && y >= 0 && x < W && y < H) img[(y | 0) * W + (x | 0)] = v; };
+  const clamp = (a, m) => a < 0 ? 0 : a >= m ? m - 1 : a;
+  function line(x0, y0, x1, y1, v) {                             // endpoints clamped into the image
+    x0 = clamp(x0 | 0, W); y0 = clamp(y0 | 0, H); x1 = clamp(x1 | 0, W); y1 = clamp(y1 | 0, H);
+    const dx = x1 - x0, dy = y1 - y0, ax = Math.abs(dx), ay = Math.abs(dy), sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -W : W;
+    let p = y0 * W + x0, e = 0;
+    if (ay < ax) for (let n = ax + 1; n--;) { if (p >= 0 && p < N) img[p] = v; e += ay; p += sx; if (e > ax) { e -= ax; p += sy; } }
+    else for (let n = ay + 1; n--;) { if (p >= 0 && p < N) img[p] = v; e += ax; p += sy; if (e > ay) { e -= ay; p += sx; } }
+  }
+  function border(v) {
+    for (let x = 0; x < W; x++) img[x] = img[N - W + x] = v;
+    for (let y = 0; y < H; y++) img[y * W] = img[y * W + W - 1] = v;
+  }
+  // arc from P0 to P1 around C: radius eases from r0 to r1, value from v0 to v1; mode picks the direction
+  function arc(x0, y0, x1, y1, ax, ay, n, v0, v1, conn, mode) {
+    const ang = (x, y) => { const a = x === ax ? 0 : Math.atan2(y - ay, x - ax); return a < 0 ? a + TAU : a; };
+    const r0 = Math.hypot(x0 - ax, y0 - ay), r1 = Math.hypot(x1 - ax, y1 - ay), a0 = ang(x0, y0);
+    let da = ang(x1, y1) - a0;
+    if (mode === 1 || (mode === 4 ? da < PI : mode !== 2 && da >= PI)) da = -(TAU - da);
+    let px = x0, py = y0;
+    for (let i = 0; i < n; i++) {
+      const r = r0 + (r1 - r0) * Math.sin(i * PI / (2 * n)), a = a0 + i * da / n, v = (v0 + i * (v1 - v0) / n | 0) & 255;
+      const x = ax + r * Math.cos(a), y = ay + r * Math.sin(a);
+      if (conn) line(px, py, x, y, v); else put(x, y, v);
+      px = x; py = y;
+    }
+  }
+
+  // ---- palette: 256 RGB entries; a new one morphs in from the shown one ----
+  const pal = { start: new Uint8Array(768), show: new Uint8Array(768), target: new Uint8Array(768), D: 0, R: 0, wait: 0, locked: false };
+  function setPalette(t, D) {
+    pal.start.set(pal.show); pal.target.set(t); pal.D = pal.R = D;
+    if (D <= 0) { pal.show.set(t); pal.wait = rand() % 600; }
+  }
+  function randomPalette() {
+    const desc = rand() % 10 === 0, n = 2 + (rand() % 10 ? rand() % 4 : rand() % 10);
+    const keys = [[rand() % 32, rand() % 32, rand() % 32], [255 - rand() % 32, 255 - rand() % 32, 255 - rand() % 32]];
+    while (keys.length < n) keys.push([rand() & 255, rand() & 255, rand() & 255]);
+    keys.sort((a, b) => a[0] + a[1] + a[2] - b[0] - b[1] - b[2]);
+    if (desc) keys.reverse();
+    const t = new Uint8Array(768), span = 256 / (n - 1) | 0;
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * span, b = i === n - 2 ? 255 : (i + 1) * span;
+      for (let j = a; j <= b; j++) for (let c = 0; c < 3; c++)
+        t[j * 3 + c] = keys[i][c] + tr((keys[i + 1][c] - keys[i][c]) * (j - a) / (b - a + 1));
+    }
+    setPalette(t, rand() % 250);
+  }
+  function stepPalette() {
+    if (pal.R > 0) {
+      const t = pal.D <= 0 ? 1 : (pal.D - pal.R) / pal.D;
+      for (let c = 0; c < 768; c++) pal.show[c] = pal.start[c] + tr((pal.target[c] - pal.start[c]) * t);
+      if (--pal.R === 0) pal.wait = rand() % 600;
+    } else if (!pal.locked && --pal.wait < 0) randomPalette();
+  }
+
+  // ---- movements: map a destination pixel to the pixel it copies from ----
+  let SX = 0, SY = 0, R = 0, Q = 0;                              // map output; polar radius and angle of the pixel
+  const polar = (x, y) => { const dx = cx - x, dy = cy - y; R = Math.hypot(dx, dy); Q = Math.atan2(dy, dx); };
+  const out = (r, a) => { SX = W - cx - tr(r * Math.cos(a)); SY = H - cy - tr(r * Math.sin(a)); };
+  const D2 = Math.hypot(W, H) / 2, k3 = r => (W < 2 ? 0 : r / (W >> 1)) ** 3;
+  const trigR = (d, x) => {                                      // TrigShift's radius (angle term uses the raw angle)
+    const f = (d[3] === 0 || (d[3] === 2 && x % 2 === 0) ? Math.cos(Q) : Math.sin(Q)) / 1.57;
+    return R - W * d[2] * (R / D2) * f;
+  };
+  const MOVES = {                                                // [flags, off-screen source -> 0 (else own coord), randomise, map]
+    LinearShift: [0, 0, d => { d[1] = rand() % 6 - 3; d[2] = rand() % 6 - 3; }, (d, x, y) => { SX = x + tr(d[1]); SY = y + tr(d[2]); }],
+    RingSpinShift: [0, 1, d => { d[1] = spin(); d[2] = rf() * .8; }, (d, x, y) => {
+      polar(x, y); const ring = (H >> 1) * d[2] || 1e-4, m = R - tr(R / ring) * ring; out(R - m / ring * m, Q + d[1]); }],
+    ZoomShift: [0, 1, d => { d[1] = spin(); d[2] = rf() * .2 - .1; }, (d, x, y) => { polar(x, y); out(R - W * d[2] * (R / D2), Q); }],
+    StretchShift: [0, 1, d => { d[1] = spin(); d[2] = rf() * .3; }, (d, x, y) => { polar(x, y); out(R - k3(R) * tr(H * d[2]), Q + d[1]); }],
+    StarburstShift: [0, 0, d => { d[1] = spin(); d[2] = rf() * .3; const v = rand() % 40; d[3] = v + v % 2; d[4] = rand() % 2; }, (d, x, y) => {
+      polar(x, y); const k = W < 2 ? 0 : R / (W >> 1), a = tr(H * d[2]);
+      if (d[4] === 0) out(R + (k * Math.sin(tr(d[3]) * Q)) ** 3 * a, Q + d[1]);
+      else out(R + (tr(Q / (6.28 / (d[3] || 1))) % 2 === 0 ? -1 : 1) * k ** 3 * a, Q + d[1]); }],
+    Shiitake: [0, 0, d => {
+      d[1] = rf() * 11 - 1; d[2] = PI * rf() * (rand() % 100 ? .05 : 16); d[3] = rf() * (rand() % 100 ? .05 : 8);
+      const r = rand() % 10; d[4] = 1 + (r === 0 ? rand() % 100 : r >= 4 ? rand() % 2 : rand() % 5); }, (d, x, y) => {
+      polar(x, y); const r = R + d[1], u = cy ? TAU * r / cy : r; out(r, Q + d[2] * Math.cos(d[4] * u) + d[3] * u); }],
+    Twirlocity: [0, 0, d => { d[1] = rand() % 50 + 1; d[2] = rf() * .6; d[3] = rand() % 10; }, (d, x, y) => {
+      polar(x, y); const h = H / 2, k = d[3] === 0 ? R / h : R ? h / R : 0; out(R, Q + d[2] * Math.cos(k * PI * d[1])); }],
+    SwirlShift: [0, 0, d => { d[1] = spin(); d[2] = rand() % 20 - 10; d[3] = rand() % 24 - 12; }, (d, x, y) => {
+      const x1 = x + tr(Math.sin(2 * d[3] * 3.14 / H * y) * d[2]), y1 = y + tr(Math.cos(2 * d[3] * 3.14 / W * x) * d[2]);
+      polar(x1, y1); const a = Q + d[1]; out(R - Math.sin(a * d[3]) * d[2], a);
+      const j = rand() % 4 - 2; SY += y < cy ? -j : j; SX += x < cx ? -j : j; }],
+    TileShift: [1, 0, d => { d[1] = rf() * .2; }, (d, x, y) => {
+      const s = H * d[1] || 1e-4, f = v => { const m = v - tr(v / s) * s; return v - tr((m / s) ** 3 * m); };
+      SX = f(x); SY = f(y); }],
+    ThingusShift: [0, 0, d => { d[1] = rf() * .8 - .4; d[2] = rf() * .2; }, (d, x, y) => {
+      polar(x, y); out(R + W * d[2] * ((W >> 2) - R) / ((W >> 1) + (W >> 2)), Q); }],
+    TrigShift: [0, 0, d => { d[1] = spin(); d[2] = rf() * .1 - .05; d[3] = rand() % 3; }, (d, x, y) => { polar(x, y); out(trigR(d, x), Q + d[1]); }],
+    TrigStretchShift: [0, 1, d => { d[1] = spin(); d[2] = rf() * .1 - .05; d[3] = rand() % 3; d[4] = rf() * .3; }, (d, x, y) => {
+      polar(x, y); out((R - k3(R) * tr(H * d[4]) + 2 * trigR(d, x)) / 3, Q + d[1]); }],
+    SinShimmerShift: [0, 0, d => { d[1] = rf() * 10 - 5; d[2] = 2 * rf(); d[3] = rand() % 2; }, (d, x, y) => {
+      const w = (Math.sin(x * d[2]) + Math.sin(y * d[2])) * d[1];
+      if (d[3] === 0) { SX = x; SY = tr(y - w); } else { SX = tr(x - w); SY = y; } }],
+    EdgeFalloffShift: [0, 1, d => { d[1] = rf() * .1; d[2] = rand() % 4; }, (d, x, y) => {
+      SX = x; SY = y;
+      if (d[2] === 0) SX = tr((1 + d[1]) * x); else if (d[2] === 1) SY = tr((1 + d[1]) * y);
+      else if (d[2] === 2) { const e = W - 1 - x; SX = tr(x - ((1 + d[1]) * e - e)); }
+      else { const e = H - 1 - y; SY = tr(y - ((1 + d[1]) * e - e)); } }],
+  };
+  const movement = name => { const [flags, fb0, rnd, map] = MOVES[name]; return { name, flags, fb0, rnd, map, d: new Array(9).fill(0) }; };
+  function buildRows(m, T, y0, y1) {
+    for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) {
+      m.map(m.d, x, y);
+      const sx = SX >= 0 && SX < W ? SX : m.fb0 ? 0 : x, sy = SY >= 0 && SY < H ? SY : m.fb0 ? 0 : y;
+      T[y * W + x] = sy * W + sx;
+    }
+  }
+
+  // ---- drawing effects: flags 1 = edge drawer, 2 = shape ----
+  const bass6 = () => (A[0] + A[2] + A[4] + A[0x401] + A[0x403] + A[0x405]) / 1530;
+  const EFFECTS = {
+    WaveEdge: () => ({ flags: 1, rnd(d) { d[1] = rand() % 2; }, draw(d) {
+      const s0 = d[1] ? 0 : 0x800, s1 = d[1] ? 0x400 : 0xc00;
+      for (let x = 0; x < W - 1; x++) { img[x] = A[s0 + x % 1024]; img[N - W + x] = A[s1 + x % 1024]; }
+      for (let y = 0; y < H - 1; y++) { img[y * W] = A[s0 + (y & 1023)]; img[y * W + W - 1] = A[s1 + (y & 1023)]; } } }),
+    EdgeGradiant: () => ({ flags: 1, v: 0, step: 1, rnd() {}, draw() {
+      if (this.v < 0 || this.v > 255) this.step = -this.step;
+      this.v += this.step; border(this.v & 255); } }),
+    CosEdgeGradiant: () => ({ flags: 1, ph: 0, rnd(d) { d[1] = rf() * .09; }, draw(d) {
+      this.ph += d[1]; if (this.ph > TAU) this.ph = 0;
+      border(tr(253 * Math.cos(this.ph) + 1) & 255); } }),
+    SpectrumEdge: () => ({ flags: 1, sums: new Float64Array(16), slot: 0,
+      rnd(d) { d[1] = rand() % 10; d[2] = 2 * (rand() % 10) + 2; d[3] = rand() % 11 + 4; }, draw(d) {
+        const n = d[3] | 0 || 1;
+        this.slot = (this.slot + 1) % n;
+        let s = 0; for (let j = 0; j < d[2]; j += 2) s += A[j] + A[j + 0x401];
+        this.sums[this.slot] = s;
+        let t = 0; for (let i = 0; i < n; i++) t += this.sums[i];
+        let v = tr(t / (n * d[2])) & 255;
+        if (d[1] === 0) v = ~v & 255; else if (d[1] > 5) v = tr(v * .9);
+        border(v); } }),
+    EdgeTrace: () => ({ flags: 1, o: 0, rnd(d) { d[1] = rand() % 30 + 35; }, draw(d) {
+      const s = d[1] | 0, f5 = 0xf5, ff = 0xff;
+      let i = this.o = Math.max(3, (this.o + 1) % s + 3);
+      for (; i < W - 4; i += s) { img[i - 3] = img[i] = f5; img[i - 2] = img[i - 1] = ff; img[W + i - 2] = img[W + i - 1] = f5; }
+      i -= W; if (i < 3) i += s;
+      for (; i < H - 4; i += s) {
+        const c = W - 1; img[(i - 3) * W + c] = img[i * W + c] = f5; img[(i - 2) * W + c] = img[(i - 1) * W + c] = ff;
+        img[(i - 2) * W + c - 1] = img[(i - 1) * W + c - 1] = f5; }
+      i -= H; if (i < 3) i += s;
+      for (; i < W - 4; i += s) {
+        const b = N - W + W - i; img[b - 3] = img[b] = f5; img[b - 2] = img[b - 1] = ff; img[b - W - 2] = img[b - W - 1] = f5; }
+      i -= W; if (i < 3) i += s;
+      for (; i < H - 4; i += s) {
+        const y = H - i; img[(y - 3) * W] = img[y * W] = f5; img[(y - 2) * W] = img[(y - 1) * W] = ff;
+        img[(y - 2) * W + 1] = img[(y - 1) * W + 1] = f5; } } }),
+    CircleWaveform: () => ({ flags: 2, r0: 20, ph: 0,
+      rnd(d) { d[1] = rand() % 4; d[2] = 2 - (rand() % 5 !== 0) + (rand() % 5 === 0); d[3] = rf() * .6 + .05; }, draw(d) {
+        const S = tr(A[0] / 256 * (H >> 1)), n = tr(1024 * Math.min(d[3], 1));
+        const val = (i, w) => d[1] === 0 ? Math.abs(w - 128) * 2 & 255 : d[1] === 1 ? w : d[1] === 2 ? 255
+          : (v => v & 256 ? ~v & 255 : v & 255)(tr(i / n * 768));
+        for (let c = 0; c < d[2]; c++) {
+          let ox = cx, oy = cy;
+          if (d[2] > 1) { const a = TAU / d[2] * c + this.ph; ox += (W >> 3) * Math.cos(a); oy += (W >> 3) * Math.sin(a); }
+          const pt = (i, w, sg) => { const t = i / n * PI, r = S * w / 256 + this.r0; return [ox + r * Math.cos(t), oy + sg * r * Math.sin(t)]; };
+          let [ux, uy] = pt(0, A[0x800], 1), [lx, ly] = pt(0, A[0xc00], -1);
+          for (let i = 1; i < n; i++) {
+            const w0 = A[0x800 + i], w1 = A[0xc00 + i], [x0, y0] = pt(i, w0, 1), [x1, y1] = pt(i, w1, -1);
+            line(ux, uy, x0, y0, val(i, w0)); line(lx, ly, x1, y1, val(i, w1));
+            ux = x0; uy = y0; lx = x1; ly = y1;
+          }
+        }
+        this.ph += .049087; } }),
+    JiggyScribble: () => ({ flags: 2, ph: 0, rnd(d) {
+      d[1] = rand() % 100 + 4; d[2] = rand() % 200 + 40; d[3] = rand() % 1000 + 300; d[4] = rand() % 20 + 1;
+      d[5] = rf() * .6 + .05; d[6] = rand() % 10; d[7] = rand() % 10; }, draw(d) {
+        this.ph += d[5]; if (this.ph > TAU) this.ph -= TAU;
+        const r = bass6() * (d[2] - d[1]), step = d[3] ? TAU / d[3] : 0;
+        const pt = t => {                                        // note: the angle is atan2(x, y), as in the original
+          const x = Math.cos(t) * r + Math.cos(t * d[4]) * d[1], y = Math.sin(t) * r + Math.sin(t * d[4]) * d[1];
+          const m = Math.hypot(x, y), a = Math.atan2(x, y) + this.ph;
+          return [Math.cos(a) * m + cx, Math.sin(a) * m + cy];
+        };
+        let [px, py] = pt(0), t = 0;
+        for (let i = 0; i < (d[3] | 0); i++, t += step) {
+          const [x, y] = pt(t);
+          if (d[7] !== 9) put(x, y, 255); else { line(px, py, x, y, 255); px = x; py = y; }
+        } } }),
+    JDar: () => ({ flags: 2, c: 0, ph: 0, tog: 0, ax: 0, ay: 0, vx: 0, vy: 0, rnd(d) {
+      d[1] = rand() % 100 + 5; d[2] = rand() % 4; d[3] = rand() % 2; d[4] = 2 ** (rand() % 4 + 2); d[5] = rf() * 1.5 + .3;
+      d[6] = rand() % 2; d[7] = rand() % 95 + 5;
+      this.c = rand() & 255; this.ax = rand() % 200; this.ay = rand() % 200; this.vx = rf(); this.vy = rf(); }, draw(d) {
+        this.ax += this.vx * 6; this.ay += this.vy * 6;          // the anchor bounces in a fixed 512×352 box
+        if (this.ax < 0 || this.ax > 472) { this.vx = -this.vx; this.ax = clamp(this.ax, 473); }
+        if (this.ay < 0 || this.ay > 312) { this.vy = -this.vy; this.ay = clamp(this.ay, 313); }
+        const s = (A[0] + A[1] + A[0x400]) / 9000;
+        this.ph += s; if (this.ph > TAU) this.ph -= TAU;
+        this.c = this.c + tr(6 * s) & 255;
+        let E = 0; for (let k = 0; k < 512; k++) E += A[2 * k] + A[2 * k + 0x401];
+        if (!E) return;
+        const seg = d[4] | 0, step = 1024 / seg | 0, rho = rand() % (W >> 1);
+        let C = 0, px = cx, py = cy;
+        for (let i = 0; i < seg; i++) {
+          let b = 0; for (let j = 0; j < step / 2; j++) b += A[0x400 - i * step - 2 * j] + A[0x7ff - i * step - 2 * j];
+          C += b;
+          let dl = b / (step * 255) * d[5];
+          this.tog ^= 1;
+          if (d[2] === 0 ? i % 2 === 0 : d[2] === 1 ? this.tog === 0 : rand() % 2 === 1) dl = -dl;
+          const r = C * rho / E, qx = cx + r * Math.cos(this.ph + dl), qy = cy + r * Math.sin(this.ph + dl);
+          arc(px, py, qx, qy, this.ax, this.ay, 100, this.c, 255, d[6] === 0, 3);
+          if (d[3] === 0) arc(W - px, H - py, W - qx, H - qy, W - this.ax, H - this.ay, 100, this.c, 255, d[6] === 0, 3);
+          px = qx; py = qy;
+        } } }),
+    Galaxy: () => ({ flags: 2, ph: 0, ox: 0, oy: 0, vx: 0, vy: 0, rnd(d) {
+      d[1] = rand() % 5 + 1; d[2] = rand() % 4 ? rand() % 20 + 10 : rand() % 100 + 9; d[3] = (rf() * .4 + .05) / d[1];
+      d[4] = rand() % 56 + 200; d[5] = rand() % 10; d[6] = rand() % 150; d[7] = rf() * 6e-7; d[8] = rf() * .3;
+      [this.ox, this.oy] = d[6] <= 3 ? [rand() % 200, rand() % 200] : [0, 0];
+      this.vx = rf() * 8192; this.vy = rf() * 8192; }, draw(d) {
+        const g = bass6();
+        if (d[6] < 2) {                                          // a wandering centre, pulled back and damped
+          const m = Math.hypot(this.vx, this.vy) || 1, q = this.ox ** 2 + this.oy ** 2, nx = this.vy / m, ny = -this.vx / m;
+          this.vx += nx * g + (-this.ox * q * d[7] - this.vx * d[8]);
+          this.vy += ny * g + (-this.oy * q * d[7] - this.vy * d[8]);
+          this.ox += this.vx * .6; this.oy += this.vy * .6;
+          if (this.ox < -W || this.ox > W - 40) { this.vx = -this.vx; this.ox = Math.min(W - 40, Math.max(-W, this.ox)); }
+          if (this.oy < -H || this.oy > H - 40) { this.vy = -this.vy; this.oy = Math.min(H - 40, Math.max(-H, this.oy)); }
+        }
+        this.ph += g * d[3]; if (this.ph > TAU) this.ph -= TAU;
+        const n = Math.min(d[1], 50), Cx = cx + this.ox, Cy = cy + this.oy;
+        for (let i = 0; i < n; i++) {
+          const R = (A[i] + A[i + 2] + A[i + 4] + A[i + 0x401] + A[i + 0x403] + A[i + 0x405]) / 1530 * (H + d[6]);
+          const a = i * PI / n + this.ph, R2 = R * A[i + 0xc00] / 255, k = 1 - A[i + 0x800] / 255, c = Math.cos(a), s = Math.sin(a);
+          const p1x = R * c, p1y = R * s, p2x = R2 * c + R * s * k, p2y = R2 * s - R * c * k;
+          arc(Cx, Cy, Cx + p1x, Cy + p1y, Cx + p2x, Cy + p2y, d[4], 255, d[4], d[5] === 0, 0);
+          arc(Cx, Cy, Cx - p1x, Cy - p1y, Cx - p2x, Cy - p2y, d[4], 255, d[4], d[5] === 0, 0);
+        } } }),
+    DotPlane: () => {                                            // a spectrum landscape scrolling towards the viewer
+      const P = new Float32Array(50 * 50 * 5), id = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+      const mul = (a, b) => { const o = new Array(16).fill(0); for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) for (let k = 0; k < 4; k++) o[r * 4 + c] += a[r * 4 + k] * b[k * 4 + c]; return o; };
+      const norm = v => { const m = Math.hypot(...v) || 1; return v.map(x => x / m); };
+      // camera: eye (W/2, H/2, H/2) looking at the origin, up +y, 60° fov, near −1, far 1000, square viewport min(W, H)
+      const eye = [W / 2 | 0, H / 2 | 0, H / 2 | 0], f = norm(eye), up = [0, 1, 0], dot = up[1] * f[1];
+      const u = norm([up[0] - f[0] * dot, up[1] - f[1] * dot, up[2] - f[2] * dot]);
+      const s = norm([u[2] * f[1] - u[1] * f[2], u[0] * f[2] - u[2] * f[0], u[1] * f[0] - u[0] * f[1]]);
+      const ed = v => eye[0] * v[0] + eye[1] * v[1] + eye[2] * v[2];
+      const view = [s[0], u[0], f[0], 0, s[1], u[1], f[1], 0, s[2], u[2], f[2], 0, -ed(s), -ed(u), -ed(f), 1];
+      const n = -1, n2 = n + .01, V = Math.min(W, H), t = Math.tan(1.0472 / 2) * n;
+      const proj = id();
+      proj[0] = V / (2 * t); proj[5] = -V / (2 * t); proj[10] = (n - n2) * (n - 1000) / (n * n * (1000 - n2));
+      proj[12] = proj[13] = V / 2; proj[14] = (n - 1000) * n2 / ((n2 - 1000) * n);
+      const m0 = id(); m0[11] = -1 / n;
+      const VP = mul(view, mul(m0, proj)), xo = H < W ? (W - H) >> 1 : 0;
+      const rot = [id(), id(), id()], k = [0, 0, 0];
+      return { flags: 2, ring: 0, zoom: .6 * W, rnd(d) { d[1] = rand() % 28 + 20; d[2] = (rand() % 4 === 0) | (rand() % 4 === 0) << 1 | (rand() % 4 === 0) << 2; }, draw(d) {
+        const G = Math.min(d[1] | 0, 50);
+        if (this.ring >= G) this.ring = 0;
+        let b = 1;                                               // new row from the spectrum, log-spaced bins
+        for (let j = 0; j < G; j++) {
+          const p = (this.ring * 50 + j) * 5, h = Math.max(A[b], A[0x400 + b]) >> 2;
+          P[p] = j - (G / 2 | 0); P[p + 1] = h * h * .015; P[p + 2] = -(G * .5); P[p + 3] = 1; P[p + 4] = 0;
+          b = b < tr(b * 1.096) ? tr(b * 1.096) : b + 1;
+        }
+        this.ring = (this.ring + 1) % G;
+        for (let r = 0, row = this.ring; r < G - 1; r++, row = (row + 1) % G) for (let j = 0; j < G; j++) {
+          const p = (row * 50 + j) * 5;
+          P[p + 2] += 1;
+          if (P[p + 1] > 0) { P[p + 1] = Math.max(0, P[p + 1] - P[p + 4]); P[p + 4] += .01; }
+        }
+        for (let ax = 0; ax < 3; ax++) if (d[2] >> ax & 1) {     // turn about x, y, z: a full turn every 300 ticks
+          if (++k[ax] === 300) k[ax] = 0;
+          const a = TAU * k[ax] / 300, c = Math.cos(a), sn = Math.sin(a), m = rot[ax] = id();
+          if (ax === 0) { m[5] = c; m[6] = -sn; m[9] = sn; m[10] = c; }
+          else if (ax === 1) { m[0] = c; m[2] = -sn; m[8] = sn; m[10] = c; }
+          else { m[0] = c; m[1] = -sn; m[4] = sn; m[5] = c; }
+        }
+        const T = id(); T[12] = this.zoom * f[0]; T[13] = this.zoom * f[1]; T[14] = this.zoom * f[2];
+        const M = mul(mul(mul(mul(rot[0], rot[1]), rot[2]), T), VP);
+        for (let r = 0; r < G; r++) for (let j = 0; j < G; j++) {
+          const p = (r * 50 + j) * 5, x = P[p], y = P[p + 1], z = P[p + 2], w1 = P[p + 3];
+          const w = x * M[3] + y * M[7] + z * M[11] + w1 * M[15];
+          if (!(w < 0)) continue;
+          const sx = tr((x * M[0] + y * M[4] + z * M[8] + w1 * M[12]) / w) + xo, sy = tr((x * M[1] + y * M[5] + z * M[9] + w1 * M[13]) / w);
+          if (sx >= 0 && sx < W && sy >= 0 && sy < H) img[sy * W + sx] = 0xfe;
+        } } };
+    },
+  };
+  const effect = (name, params) => {
+    const e = EFFECTS[name](); e.name = name; e.d = new Array(9).fill(0);
+    if (params) params.forEach((v, i) => { e.d[i + 1] = v; }); else e.rnd(e.d);
+    return e;
+  };
+
+  // ---- engine ----
+  const MOVE_POOL = ['LinearShift', 'LinearShift', 'ThingusShift', 'ZoomShift', 'RingSpinShift', 'StretchShift', 'TileShift',
+    'TrigShift', 'SinShimmerShift', 'EdgeFalloffShift', 'StarburstShift', 'SwirlShift', 'TrigStretchShift', 'Twirlocity', 'Shiitake'].map(movement);
+  const FX_POOL = ['EdgeTrace', 'EdgeGradiant', 'CosEdgeGradiant', 'WaveEdge', 'SpectrumEdge', 'CircleWaveform', 'DotPlane', 'JDar',
+    'Galaxy', 'JiggyScribble'].map(n => effect(n));
+  let table = Int32Array.from({ length: N }, (_, i) => i), cur = { flags: 0 }, pending = null, trans = null;
+  let pre = [], post = [], moveTimer = 0, fxTimer = 0;
+  function newMovement() {
+    let m; do m = MOVE_POOL[rand() % MOVE_POOL.length]; while (m === cur);
+    m.rnd(m.d);
+    pending = { m, T: new Int32Array(N), row: 0 };
+  }
+  function newEffects() {
+    pre = []; post = [];
+    const pick = fl => { let e; do e = FX_POOL[rand() % FX_POOL.length]; while (e.flags !== fl); e.rnd(e.d); return e; };
+    for (let k = rand() % 2; k--;) pre.push(pick(1));
+    for (let m = ((rand() % 4 + 1) / 4 | 0) + 1; m--;) { const e = pick(2); (rand() & 1 ? pre : post).push(e); }
+  }
+  function morph(k) {                                            // step k of 18 between the old and the new table
+    const { a, b } = trans, t = k / 19;
+    for (let i = 0; i < N; i++) {
+      const ay = a[i] / W | 0, ax = a[i] - ay * W, by = b[i] / W | 0, bx = b[i] - by * W;
+      table[i] = (ay + tr(t * (by - ay))) * W + ax + tr(t * (bx - ax));
+    }
+  }
+  function tick() {
+    moveTimer--; fxTimer--;
+    if (moveTimer < 1) { moveTimer = rand() % 390 + Math.max(60, H / 3 | 0); newMovement(); }
+    if (fxTimer < 1) { fxTimer = rand() % 310 + 90; newEffects(); }
+    if (trans && --trans.hold <= 0) {
+      if (++trans.k > 18) { table = trans.b; trans = null; }
+      else { morph(trans.k); trans.hold = rand() % 15 + 1; }
+    }
+    if (pending) {
+      buildRows(pending.m, pending.T, pending.row, Math.min(H, pending.row + 3));
+      if ((pending.row += 3) >= H) {
+        trans = { a: table, b: pending.T, k: 1, hold: rand() % 15 + 1 };
+        table = new Int32Array(N); morph(1);
+        cur = pending.m; pending = null;
+      }
+    }
+    for (const e of pre) if (!(cur.flags & e.flags)) e.draw(e.d);
+    let src = img; img = other; other = src;
+    for (let i = 0; i < N; i++) img[i] = src[table[i]];
+    for (const e of post) e.draw(e.d);
+    blur();
+    stepPalette();
+  }
+  function blur() {                                              // new = LUT[centre + 4 neighbours]; wraps at the edges
+    const s = img, o = other;
+    img = o; other = s;
+    for (let i = W; i < N - W; i++) o[i] = LUT[s[i] + s[i - W] + s[i + W] + s[i - 1] + s[i + 1]];
+    for (let x = 0; x < W; x++) {
+      const l = x ? x - 1 : W - 1, r = x < W - 1 ? x + 1 : 0, b = N - W;
+      o[x] = LUT[s[x] + s[b + x] + s[W + x] + s[l] + s[r]];
+      o[b + x] = LUT[s[b + x] + s[b - W + x] + s[x] + s[b + l] + s[b + r]];
+    }
+  }
+  function load(p) {                                             // p = a BAT_PRESETS row, or null for Randomisation
+    pal.locked = false; pending = null; trans = null;
+    if (p) {
+      const [, [mName, ...mp], pr, po, rgb] = p;
+      const m = movement(mName); mp.forEach((v, i) => { m.d[i + 1] = v; });
+      table = new Int32Array(N); buildRows(m, table, 0, H); cur = m;
+      pre = pr.map(([n, ...v]) => effect(n, v)); post = po.map(([n, ...v]) => effect(n, v));
+      if (rgb) { setPalette(Uint8Array.from(atob(rgb), ch => ch.charCodeAt(0)), 25); pal.locked = true; }
+    }
+    // as in the original, activating a preset zeroes both timers, so the next tick already swaps in random effects
+    // and starts morphing to a random movement; only a locked palette stays
+    moveTimer = fxTimer = 0;
+  }
+  randomPalette(); pal.show.set(pal.target); pal.R = 0; pal.wait = rand() % 600;
+  const rgba = new Uint32Array(N), lut = new Uint32Array(256);
+  function pixels() {
+    for (let c = 0; c < 256; c++) lut[c] = 0xff000000 | pal.show[c * 3 + 2] << 16 | pal.show[c * 3 + 1] << 8 | pal.show[c * 3];
+    for (let i = 0; i < N; i++) rgba[i] = lut[img[i]];
+    return rgba;
+  }
+  return { W, H, A, tick, load, pixels };
+}
+
+const BAT = { fps: 24, acc: 0, sim: null, canvas: document.createElement('canvas'), data: null };
+function drawBattery(dt) {
+  if (!BAT.sim) {
+    BAT.sim = makeBattery();
+    BAT.canvas.width = BAT.sim.W; BAT.canvas.height = BAT.sim.H;
+    BAT.data = new ImageData(BAT.sim.W, BAT.sim.H);
+    BAT.sim.load(BAT_PRESETS[$('preset').value - 1] ?? null);
+  }
+  BAT.acc = Math.min(BAT.acc + dt * BAT.fps, 2);                 // the original renders about 24 frames/s
+  if (BAT.acc >= 1) {
+    const A = BAT.sim.A;
+    // shortcut: one mono analyser feeds both channels, and browser spectrum bytes are dB-scaled, unlike WMP's
+    A.set(freq.subarray(0, 1024), 0); A.set(freq.subarray(0, 1024), 0x400);
+    A.set(wave.subarray(0, 1024), 0x800); A.set(wave.subarray(0, 1024), 0xc00);
+    for (; BAT.acc >= 1; BAT.acc--) BAT.sim.tick();
+    new Uint32Array(BAT.data.data.buffer).set(BAT.sim.pixels());
+    BAT.canvas.getContext('2d').putImageData(BAT.data, 0, 0);
+  }
+  g.imageSmoothingEnabled = false;                               // 384×288 stretched to the window, hard pixels
+  g.drawImage(BAT.canvas, 0, 0, W, H);
 }
 
 // ---------- ambience (WebGL feedback) ----------
@@ -914,6 +1353,7 @@ function frame(now) {
   if (fx === 'ambience' || fx === 'tolerance')
     drawFeedback(fx, { res: [W, H], t, bass, treble, beat, flip, preset: +$('preset').value });
   else if (fx === 'alchemy') drawAlchemy(dt);
+  else if (fx === 'battery') drawBattery(dt);
   else if (fx === 'scope') drawScope(t);
   else drawBars(dt);
   requestAnimationFrame(frame);
@@ -923,7 +1363,7 @@ requestAnimationFrame(frame);
 // ---------- start ----------
 if (md) { listDevices(); md.addEventListener('devicechange', listDevices); }
 if (!canSink) { $('outDev').disabled = true; $('outDev').title = 'Output selection for Web Audio needs Chrome/Edge 110+'; }
-status(canSink ? 'Pick an audio file. Double-click or press F for fullscreen, 1-5 switch effects, N = next Alchemy warp, H hides this panel.'
+status(canSink ? 'Pick an audio file. Double-click or press F for fullscreen, 1-6 switch effects, N = next Alchemy warp, H hides this panel.'
                : 'This browser plays on the default output only (output picking needs Chrome/Edge). Pick an audio file.');
 </script>
 </body>

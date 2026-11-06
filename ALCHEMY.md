@@ -13,7 +13,7 @@ measures them: add `--song` for music, and read the `sheet_*.png` contact sheets
 `measure/README.md`.
 
 ## How Alchemy works (the model implemented)
-- **One persistent image is the whole state.** Nothing clears it. Each tick (about 16/s):
+- **One persistent image is the whole state.** Nothing clears it. Each tick (about 14/s):
   1. the image is copied through a per-pixel **warp** table and blurred slightly on the way;
   2. one or two **drawing effects** draw on top of it.
 
@@ -49,7 +49,7 @@ measures them: add `--song` for music, and read the `sheet_*.png` contact sheets
   - `paste(src, w, h)`;
   - `next()`, change warp;
   - `opt`, test switches: `blur` (true) and `flag48` (false). Both stay at their defaults; see the local notes.
-- **`drawAlchemy(dt)`** runs 16 ticks/s. Each tick it copies `img` into a canvas; every frame it draws `rect()` stretched
+- **`drawAlchemy(dt)`** runs 14 ticks/s. Each tick it copies `img` into a canvas; every frame it draws `rect()` stretched
   to the window, smoothed. It doesn't use WebGL.
 - **Buffer.** It is window-sized (CSS px), capped at 1280 px wide for CPU cost: ≈11 ms/tick at 1280×720, and a
   40–100 ms hitch when the warp table is rebuilt. While the window is being resized, the old buffer is stretched. After
