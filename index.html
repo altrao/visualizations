@@ -38,12 +38,12 @@
       <option value="B">B · Visualize what this computer is playing</option>
     </select></label>
     <label>Effect <select id="effect">
-      <option value="bars">Bars</option>
-      <option value="scope">Scope</option>
-      <option value="ambience">Ambience</option>
-      <option value="tolerance">Tolerance</option>
       <option value="alchemy">Alchemy</option>
       <option value="battery">Battery</option>
+      <option value="tolerance">Tolerance</option>
+      <option value="ambience">Ambience</option>
+      <option value="bars">Bars</option>
+      <option value="scope">Scope</option>
     </select></label>
     <label id="presetWrap" class="hidden">Preset <select id="preset"></select></label>
   </div>
@@ -214,7 +214,7 @@ $('preset').onchange = () => {
   else clearFeedback();
 };
 
-const effects = ['bars', 'scope', 'ambience', 'tolerance', 'alchemy', 'battery'];
+const effects = ['alchemy', 'battery', 'tolerance', 'ambience', 'bars', 'scope'];
 $('effect').onchange = () => {
   const fx = $('effect').value, webgl = fx === 'ambience' || fx === 'tolerance';
   $('cgl').classList.toggle('hidden', !webgl);
