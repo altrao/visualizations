@@ -303,7 +303,7 @@ function drawScope(t) {
   g.shadowBlur = 0;
 }
 
-// ---------- alchemy (CPU simulation of the original's behaviour; see ALCHEMY.md) ----------
+// ---------- alchemy (CPU simulation of the original's behaviour; see specs/ALCHEMY.md) ----------
 // One 384×288 XRGB image is the whole state: each tick it is copied through the Composite warp's remap table, then the
 // drawing effects plot waveform lines and balls onto it. Nothing fades it. Hover only zooms what is shown.
 function makeAlchemy(W = 384, H = 288) {
@@ -730,7 +730,7 @@ const BAT_PRESETS = [ // [name, movement, pre effects, post effects, locked pale
   ["chemicalnova", ["StarburstShift",-0.0390469,0.169341,2], [["EdgeGradiant"]], [["CircleWaveform",1,1,0.437555],["JDar",84,0.761242,0.616034,14,0,0,100]], "Gh0AGh0FGhwLGxsRGxoWHBocHBkiHRgnHRctHhczHhY4HhU+HxREHxRJIBNPIBJVIRFbIRFgIhBmIg9sIg5xIw53Iw19JAyCJAuIJQuOJQqTJgmZJwelKAuhKQ+dKhOZKxiULByQLSCMLiWHMCmDMS1/MjJ6MzZ2NDpyNT9tNkNpOEdlOUthOlBcO1RYPFhUPV1PPmFLQGVHQWpCQm4+Q3I6RHc1RXsxSIQoTIQoUYQnVoMnW4MmYIMlZYIlaoIkb4IjdIEjeYEifoEhg4AhiIAgjYAfkn8fl38enH8doX4dpn4cq34bsH0btX0aun0Zv3wZxHwYyXwXznsX2HoV2HcZ2XMe2m8j22sn22gs3GQx3WA13lw631g/31VD4FFI4U1N4klR40VW40Jb5D5g5Tpk5jZp5zJu5y9y6Ct36Sd86iOA6x+F6xyK7BiO7RST7wyd6xCe5hWf4hqg3R+i2SSj1Cmk0C6myzOnxziowj2qvkKruUestUyusFGvrFWwp1qxo1+znmS0mmm1lW63kXO4jHi5iH27g4K8f4e9eoy/dpHAbJvDbJvEbJvFa5rGa5rHaprIapnJaZnKaZjLaJjMaJjNZ5fOZ5fPZpfQZpbRZZbSZZXTZJXUZJXVY5TWY5TXYpTYYpPZYZPaYZLbYJLcYJLdX5HeXpDhYZLcZZXXapjSbZvNcp3IdqDDeaO+faa5gam0hquvia6qjrGlkrSglbebmbmVnbyQor+LpcKGqcWBrsd8scp3tc1yutBtvtNowdVjxtheyttZ0uFO0uFP0uFR0uBT0uBV0t9X0t9Z0t5b0t5d0t1f0t1h0t1j0txl0txn0ttp09tr09pt09pv09lx09lz09l109h309h509d709d909Z/09aB09WD1NSH1dSK1tSN19WQ2NWT2daW29aZ3Nec3def3tei39il4dio4tmr49mu5Nqx5dq059u46Nu76du+6tzB69zE7N3H7t3K797N8N7Q8d7T8t/W9N/Z9eDc9uDf9+Hi+OHl"]
 ];
 
-// ---------- battery (CPU simulation of the original's behaviour) ----------
+// ---------- battery (CPU simulation of the original's behaviour; see specs/BATTERY.md) ----------
 // The state is one 8-bit image of palette indices. Each tick: "pre" effects draw, the image is copied through a
 // per-pixel movement table, "post" effects draw, then a 5-tap blur that also darkens by one index. New movements,
 // effects and palettes are picked on random timers; a new movement morphs in over 18 steps.
